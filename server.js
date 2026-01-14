@@ -162,8 +162,6 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
       }
     });
 
-});
-
 // ---- 2️⃣ streaming‑only route (bypasses any parser) ----
 app.post('/v1/chat/completions', async (req, res) => {
   if (req.query.stream === 'true') {
