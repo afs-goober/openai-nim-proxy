@@ -39,7 +39,6 @@ app.get('/health', (req, res) => {
     service: 'OpenAI → NVIDIA NIM Proxy',
     reasoning_display: SHOW_REASONING,
     thinking_mode: ENABLE_THINKING_MODE
-  });
 
 // ---------------------------------------------------
 //  Model list (OpenAI‑compatible)
@@ -50,13 +49,13 @@ app.get('/v1/models', (req, res) => {
     object: 'model',
     created: Date.now(),
     owned_by: 'nvidia-nim-proxy'
-  });
-  res.json({ object: 'list', data: models });
+      
+  res.json({ object: 'list', data: models 
 
 // ---------------------------------------------------
 //  1️⃣  Non‑stream route (has the JSON parser)
 // ---------------------------------------------------
-const jsonParser = express.json({ limit: '5mb' });   // increase limit if you need it
+const jsonParser = express.json({ limit: '5mb' })   // increase limit if you need it
 
 app.post('/v1/chat/completions', jsonParser, async (req, res) => {
   // --------------------------- YOUR ORIGINAL LOGIC ---------------------------
@@ -145,7 +144,6 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
         type: 'invalid_request_error',
         code: error.response?.status || 500
       }
-    });
   }   // <-- closes the try / catch block
 
 // ---------------------------------------------------
@@ -158,7 +156,7 @@ app.post('/v1/chat/completions', async (req, res) => {
   }
   // If there is no `stream` flag we simply ignore the request.
   // It will be handled by the non‑stream handler above.
-});   // ← closes the streaming‑only route handler
+  // ← closes the streaming‑only route handler
 
 // ---------------------------------------------------
 //  3️⃣  Helper that streams data from NIM → client
@@ -229,7 +227,6 @@ async function streamToClient(req, res) {
           // malformed line – just forward it unchanged
           res.write(line + '\n');
         }
-      });
 
     upstream.data.on('end', () => res.end());
     upstream.data.on('error', err => {
@@ -256,7 +253,7 @@ app.get('/v1/models', (req, res) => {
     object: 'model',
     created: Date.now(),
     owned_by: 'nvidia-nim-proxy'
-  });
+
   res.json({ object: 'list', data: models });
 
 // ---------------------------------------------------
@@ -278,4 +275,5 @@ app.listen(PORT, () => {
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`Reasoning display: ${SHOW_REASONING ? 'ENABLED' : 'DISABLED'}`);
   console.log(`Thinking mode: ${ENABLE_THINKING_MODE ? 'ENABLED' : 'DISABLED'}`);
+});
 });
