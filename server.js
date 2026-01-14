@@ -8,7 +8,7 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+
 
 // NVIDIA NIM API configuration
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
@@ -57,7 +57,12 @@ app.get('/v1/models', (req, res) => {
 });
 
 // Chat completions endpoint (main proxy)
-app.post('/v1/chat/completions', async (req, res) => {
+
+// ---- 1️⃣ non‑stream route (has the JSON parser) ----
+const jsonParser = express.json({ limit: '5mb' });   // adjust limit if needed
+app.post('/v1/chat/completions', jsonParser, async (req, res) => {
+  // <<< INSERT your original non‑stream logic here >>>app.post('/v1/chat/completions', jsonParser, async (req, res) => {
+  // --- BEGIN ORIGINAL NON‑STREAM LOGIC ---
   try {
     const { model, messages, temperature, max_tokens, stream } = req.body;
     
@@ -90,6 +95,89 @@ app.post('/v1/chat/completions', async (req, res) => {
         }
       }
     }
+    
+    // Build the request to NIM
+    const nimRequest = {
+      model: nimModel,
+      messages: messages,
+      temperature: temperature || 0.6,
+      max_tokens: max_tokens || 9024,
+      ...(ENABLE_THINKING_MODE ? { extra_body: { chat_template_kwargs: { thinking: true } } } : {}),
+      stream: stream || false
+    };
+    
+    // Call NIM
+    const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
+      headers: {
+        Authorization: `Bearer ${NIM_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      responseType: stream ? 'stream' : 'json'
+    });
+    
+    // ---------- NON‑STREAM (JSON) RESPONSE ----------
+    if (!stream) {
+      // Transform NIM → OpenAI format, merge reasoning, send JSON
+      const openaiResponse = {
+        id: `chatcmpl-${Date.now()}`,
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model: model,
+        choices: response.data.choices.map(choice => {
+          let fullContent = choice.message?.content || '';
+          if (SHOW_REASONING && choice.message?.reasoning_content) {
+            fullContent = ` Trace\\n${choice.message.reasoning_content}\\n\\n\\n${fullContent}`;
+          }
+          return {
+            index: choice.index,
+            message: {
+              role: choice.message.role,
+              content: fullContent
+            },
+            finish_reason: choice.finish_reason
+          };
+        }),
+        usage: response.data.usage || {
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0
+        }
+      };
+      res.json(openaiResponse);
+      return;
+    }
+    
+    // ---------- STREAMING PATH (should never reach here) ----------
+    // If we get here the client asked for a stream but we already handled it above.
+    // Keep the original streaming logic (identical to the streaming‑only handler)
+    // just copy‑paste it here or simply call streamToClient(req, res);
+    
+  } catch (error) {
+    console.error('Proxy error:', error.message);
+    res.status(error.response?.status || 500).json({
+      error: {
+        message: error.message || 'Internal server error',
+        type: 'invalid_request_error',
+        code: error.response?.status || 500
+      }
+    });
+  }
+  // --- END ORIGINAL NON‑STREAM LOGIC ---
+});
+
+});
+
+// ---- 2️⃣ streaming‑only route (bypasses any parser) ----
+app.post('/v1/chat/completions', async (req, res) => {
+  if (req.query.stream === 'true') {
+    await streamToClient(req, res);   // helper defined below
+    return;
+  }
+});
+
+// ---- 3️⃣ streaming helper (same as before) ----
+async function streamToClient(req, res) { … }   // copy the helper from the snippet
+
     
     // Transform OpenAI request to NIM format
     const nimRequest = {
