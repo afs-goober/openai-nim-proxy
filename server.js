@@ -161,9 +161,6 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
         code: error.response?.status || 500
       }
     });
-  }
-  // --- END ORIGINAL NON‑STREAM LOGIC ---
-});
 
 });
 
