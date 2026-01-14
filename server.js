@@ -425,7 +425,48 @@ async function streamToClient(req, res) {
 
 
 
-// Catch-all for unsupported endpoints
+// ---------------------------------------------------
+// 7️⃣  END OF NON‑STREAM ROUTE (has the JSON parser)
+// ---------------------------------------------------
+});   // ← closes the *non‑stream* route handler
+
+// ---------------------------------------------------
+// 8️⃣  STREAMING‑ONLY ROUTE (bypasses any parser)
+// ---------------------------------------------------
+app.post('/v1/chat/completions', async (req, res) => {
+  if (req.query.stream === 'true') {
+    await streamToClient(req, res);   // helper defined below
+    return;
+  }
+});   // ← closes the *streaming‑only* route handler
+
+// ---------------------------------------------------
+// 9️⃣  Helper that streams data from NIM → client
+// ---------------------------------------------------
+async function streamToClient(req, res) {
+  /* ... (the helper code you already have) ... */
+}   // <-- closes the async function `streamToClient`
+
+// ---------------------------------------------------
+// 10️⃣  Health‑check & model‑listing (unchanged)
+// ---------------------------------------------------
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', service: 'OpenAI to NVIDIA NIM Proxy' });
+});
+
+app.get('/v1/models', (req, res) => {
+  const models = Object.keys(MODEL_MAPPING).map(m => ({
+    id: m,
+    object: 'model',
+    created: Date.now(),
+    owned_by: 'nvidia-nim-proxy',
+  }));
+  res.json({ object: 'list', data: models });
+});
+
+// ---------------------------------------------------
+// 11️⃣  Catch‑all for unsupported endpoints
+// ---------------------------------------------------
 app.all('*', (req, res) => {
   res.status(404).json({
     error: {
@@ -436,8 +477,12 @@ app.all('*', (req, res) => {
   });
 });
 
+// ---------------------------------------------------
+// 12️⃣  Start the server
+// ---------------------------------------------------
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`OpenAI to NVIDIA NIM Proxy running on port ${PORT}`);
+  console.log(`OpenAI → NVIDIA NIM Proxy running on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`Reasoning display: ${SHOW_REASONING ? 'ENABLED' : 'DISABLED'}`);
   console.log(`Thinking mode: ${ENABLE_THINKING_MODE ? 'ENABLED' : 'DISABLED'}`);
