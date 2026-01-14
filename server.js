@@ -41,7 +41,6 @@ app.get('/health', (req, res) => {
     service: 'OpenAI → NVIDIA NIM Proxy',
     reasoning_display: SHOW_REASONING,
     thinking_mode: ENABLE_THINKING_MODE
-  });
 
 // ---------------------------------------------------
 //  Model list (OpenAI‑compatible)
@@ -53,12 +52,12 @@ app.get('/v1/models', (req, res) => {
     created: Date.now(),
     owned_by: 'nvidia-nim-proxy'
   }));
-  res.json({ object: 'list', data: models });
+  res.json({ object: 'list', data: models 
 
 // ---------------------------------------------------
 //  1️⃣  NON‑STREAM route (has the JSON parser)
 // ---------------------------------------------------
-const jsonParser = express.json({ limit: '5mb' });   // adjust if you need a larger limit
+const jsonParser = express.json({ limit: '5mb' ;   // adjust if you need a larger limit
 
 app.post('/v1/chat/completions', jsonParser, async (req, res) => {
   // ----------------------------------------------------------------
@@ -79,7 +78,7 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
           headers: { Authorization: `Bearer ${process.env.NIM_API_KEY}`,
                      'Content-Type': 'application/json' },
           validateStatus: s => s < 500
-        }).then(r => { if (r.status >= 200 && r.status < 300) nimModel = model; });
+        }).then(r => { if (r.status >= 200 && r.status < 300) nimModel = model;
       } catch (_) {}
       if (!nimModel) {
         const lc = model.toLowerCase();
@@ -152,7 +151,7 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
       error: { message: error.message || 'Internal server error',
                type: 'invalid_request_error',
                code: error.response?.status || 500 }
-    });
+  
 
 // ---------------------------------------------------
 //  2️⃣  STREAMING‑ONLY route (bypasses any parser)
@@ -163,8 +162,7 @@ app.post('/v1/chat/completions', async (req, res) => {
     return;
   }
   // If there is no `stream` flag we simply ignore the request;
-  // it will be handled by the non‑stream handler above.
-});   // ← closes the *streaming‑only* route handler
+  // it will be handled by the non‑stream handler above.   // ← closes the *streaming‑only* route handler
 
 // ---------------------------------------------------
 //  3️⃣  Helper that streams data from NIM → client
@@ -236,7 +234,7 @@ async function streamToClient(req, res) {
           // If the line isn’t valid JSON just forward it as‑is
           res.write(line + '\n');
         }
-      });
+     
 
     // When the upstream stream ends, finish the response
     upstream.data.on('end', () => res.end());
@@ -245,14 +243,14 @@ async function streamToClient(req, res) {
     upstream.data.on('error', err => {
       console.error('Upstream stream error:', err);
       res.end();
-    });
+  
   } catch (err) {
     console.error('Streaming proxy error:', err);
     res.status(err.response?.status || 500).json({
       error: { message: err.message || 'Streaming proxy failed',
                type: 'internal_error',
                code: err.response?.status || 500 }
-    });
+
   }
 }
 
@@ -265,8 +263,7 @@ app.get('/v1/models', (req, res) => {
     object: 'model',
     created: Date.now(),
     owned_by: 'nvidia-nim-proxy'
-  }));
-  res.json({ object: 'list', data: models });
+  res.json({ object: 'list', data: models 
 
 // ---------------------------------------------------
 //  Catch‑all for unknown endpoints
@@ -276,7 +273,6 @@ app.all('*', (req, res) => {
     error: { message: `Endpoint ${req.path} not found`,
              type: 'invalid_request_error',
              code: 404 }
-  });
 
 // ---------------------------------------------------
 //  Start the server
