@@ -170,8 +170,104 @@ app.post('/v1/chat/completions', async (req, res) => {
   }
 });
 
-// ---- 3️⃣ streaming helper (same as before) ----
-async function streamToClient(req, res) { … }   // copy the helper from the snippet
+// ---------------------------------------------------
+// 3️⃣  Helper that streams data from NIM → client
+// ---------------------------------------------------
+async function streamToClient(req, res) {
+  try {
+    // The request body has NOT been parsed yet (no jsonParser ran)
+    const { messages, temperature, max_tokens } = req.body; // raw body
+
+    // ----- Call the NVIDIA NIM API with streaming enabled -----
+    const upstream = await axios.post(
+      `${process.env.NIM_API_BASE}/chat/completions`,
+      { messages, temperature, max_tokens, stream: true },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.NIM_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        responseType: 'stream', // keep the connection open
+        timeout: 0,             // never auto‑timeout
+      }
+    );
+
+    // ----- Set SSE‑compatible headers (Render/Nginx friendly) -----
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Transfer-Encoding', 'chunked');
+
+    // ----- Pipe the upstream stream chunk‑by‑chunk to the response -----
+    let buffer = '';
+    let reasoningStarted = false;
+
+    upstream.data.on('data', (chunk) => {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      lines.forEach((line) => {
+        // Skip anything that isn’t an SSE data line
+        if (!line.startsWith('data: ')) return;
+
+        // [DONE] is the termination marker from NIM – just forward it
+        if (line.includes('[DONE]')) {
+          res.write(line + '\n\n');
+          return;
+        }
+
+        try {
+          // Strip the leading "data: " prefix
+          const data = JSON.parse(line.slice(6)); // "data: " → ""
+
+          // ----- Optional: merge reasoning into the content field -----
+          if (SHOW_REASONING && data.choices?.[0]?.delta) {
+            const reasoning = data.choices[0].delta.reasoning_content;
+            const content   = data.choices[0].delta.content;
+
+            if (reasoning) {
+              // First chunk that contains reasoning – prepend the marker
+              if (!reasoningStarted) {
+                data.choices[0].delta.content = ` Trace\\n${reasoning}\\n\\n\\n`;
+                reasoningStarted = true;
+              } else {
+                data.choices[0].delta.content = `${reasoning}\\n\\n\\n`;
+              }
+              delete data.choices[0].delta.reasoning_content;
+            } else if (content) {
+              // Plain content only – nothing to prepend
+              data.choices[0].delta.content = content;
+              delete data.choices[0].delta.reasoning_content;
+            }
+          }
+
+          // Send the chunk back to the client as an SSE message
+          res.write(`data: ${JSON.stringify(data)}\n\n`);
+        } catch (e) {
+          // If the line isn’t valid JSON we just forward it unchanged
+          res.write(line + '\n');
+        }
+      });
+    });
+
+    // When the upstream stream ends, close our response
+    upstream.data.on('end', () => res.end());
+
+    // If the upstream stream errors, close the response and log the error
+    upstream.data.on('error', (err) => {
+      console.error('Upstream stream error:', err);
+      res.end();
+    });
+  } catch (err) {
+    console.error('Streaming proxy error:', err);
+    res.status(err.response?.status || 500).json({
+      error: {
+        message: err.message || 'Streaming proxy failed',
+        type: 'internal_error',
+        code: err.response?.status || 500,
+      },
+    });
 
     
     // Transform OpenAI request to NIM format
