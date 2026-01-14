@@ -405,26 +405,24 @@ async function streamToClient(req, res) {
       
       res.json(openaiResponse);
     
-    } else {
-      // ----  KEEP YOUR ORIGINAL ELSE‑BLOCK LOGIC HERE  ----
-      // (the code that was already inside this else‑block;
-      //  do NOT modify it – just leave it exactly as it was)
-      // -------------------------------------------------------
-      // (no extra } or ) here)
-    }   // <-- closes the else‑block that you just kept
+       try {
+      //  ←  KEEP ALL OF YOUR EXISTING CODE THAT WAS INSIDE THIS BLOCK
+      //      (including the original “else” logic you posted)
+      // ---------------------------------------------------------
+      //   (keep all of your original code here)
+      // ---------------------------------------------------------
 
-  } catch (error) {                               // <-- THIS catch now has a matching try above it
-    console.error('Proxy error:', error.message);
-    res.status(error.response?.status || 500).json({
-      error: {
-        message: error.message || 'Internal server error',
-        type: 'invalid_request_error',
-        code: error.response?.status || 500
-      }
-    });
-  }   // <-- closes the try / catch block
+    } catch (error) {                     // <-- now has a matching try above it
+      console.error('Proxy error:', error.message);
+      res.status(error.response?.status || 500).json({
+        error: {
+          message: error.message || 'Internal server error',
+          type: 'invalid_request_error',
+          code: error.response?.status || 500
+        }
+      });
+    }   // <-- closes the try / catch block
 
-});   // <-- closes the non‑stream route handler
 
 
 // Catch-all for unsupported endpoints
