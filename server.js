@@ -40,7 +40,6 @@ app.get('/health', (req, res) => {
     reasoning_display: SHOW_REASONING,
     thinking_mode: ENABLE_THINKING_MODE
   });
-});
 
 // ---------------------------------------------------
 //  Model list (OpenAI‑compatible)
@@ -53,7 +52,6 @@ app.get('/v1/models', (req, res) => {
     owned_by: 'nvidia-nim-proxy'
   });
   res.json({ object: 'list', data: models });
-});
 
 // ---------------------------------------------------
 //  1️⃣  Non‑stream route (has the JSON parser)
@@ -232,7 +230,6 @@ async function streamToClient(req, res) {
           res.write(line + '\n');
         }
       });
-    });
 
     upstream.data.on('end', () => res.end());
     upstream.data.on('error', err => {
@@ -261,7 +258,6 @@ app.get('/v1/models', (req, res) => {
     owned_by: 'nvidia-nim-proxy'
   });
   res.json({ object: 'list', data: models });
-});
 
 // ---------------------------------------------------
 //  Catch‑all for unknown endpoints
@@ -272,7 +268,6 @@ app.all('*', (req, res) => {
              type: 'invalid_request_error',
              code: 404 }
           };
-});
 
 // ---------------------------------------------------
 //  Start the server
