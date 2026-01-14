@@ -10,6 +10,9 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
+// 🧠 RP MEMORY STORAGE (in-memory)
+const RP_MEMORY = new Map();
+
 // NVIDIA NIM API configuration
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY = process.env.NIM_API_KEY;
@@ -30,6 +33,44 @@ const MODEL_MAPPING = {
   'claude-3-sonnet': 'openai/gpt-oss-20b',
   'gemini-pro': 'qwen/qwen3-next-80b-a3b-thinking' 
 };
+
+async function summarizeChat(nimModel, messages) {
+  try {
+    const summaryPrompt = [
+      {
+        role: 'system',
+        content:
+          'Summarize the roleplay so far. Keep character traits, relationships, ongoing plot points, rules, tone, and important facts. Be concise but complete.'
+      },
+      {
+        role: 'user',
+        content: messages.map(m => `${m.role}: ${m.content}`).join('\n')
+      }
+    ];
+
+    const response = await axios.post(
+      `${NIM_API_BASE}/chat/completions`,
+      {
+        model: nimModel,
+        messages: summaryPrompt,
+        max_tokens: 600,
+        temperature: 0.3
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${NIM_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    return response.data.choices[0].message.content;
+  } catch (e) {
+    console.error('Summarization failed:', e.message);
+    return null;
+  }
+}
+
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -60,23 +101,63 @@ app.get('/v1/models', (req, res) => {
 app.post('/v1/chat/completions', async (req, res) => {
   try {
     const { model, messages, temperature, max_tokens, stream } = req.body;
-    // 🔥 HARD TRIM to prevent Render 413 errors
-let safeMessages = messages || [];
 
-// Keep only last 12 messages (adjust if needed)
-const MAX_MESSAGES = 12;
+    // ===== MODEL SELECTION (must come FIRST) =====
+    let nimModel = MODEL_MAPPING[model];
 
-if (safeMessages.length > MAX_MESSAGES) {
-  safeMessages = safeMessages.slice(-MAX_MESSAGES);
-}
+    if (!nimModel) {
+      const modelLower = model.toLowerCase();
+      if (modelLower.includes('gpt-4') || modelLower.includes('claude-opus') || modelLower.includes('405b')) {
+        nimModel = 'meta/llama-3.1-405b-instruct';
+      } else if (modelLower.includes('claude') || modelLower.includes('gemini') || modelLower.includes('70b')) {
+        nimModel = 'meta/llama-3.1-70b-instruct';
+      } else {
+        nimModel = 'meta/llama-3.1-8b-instruct';
+      }
+    }
 
-// Log payload size for debugging
-console.log(
-  'Message count:', safeMessages.length,
-  'Payload size:',
-  Buffer.byteLength(JSON.stringify(safeMessages)) / 1024,
-  'KB'
-);
+    // ===== 🧠 RP MEMORY + SAFE TRIMMING =====
+    let safeMessages = messages || [];
+    const CHAT_ID = req.headers['x-chat-id'] || 'default';
+
+    let memory = RP_MEMORY.get(CHAT_ID) || '';
+
+    // Summarize old history
+    if (safeMessages.length > 20) {
+      const summary = await summarizeChat(
+        nimModel,
+        safeMessages.slice(0, -10)
+      );
+
+      if (summary) {
+        memory = memory ? memory + '\n\n' + summary : summary;
+        RP_MEMORY.set(CHAT_ID, memory);
+      }
+
+      // Keep only recent dialogue
+      safeMessages = safeMessages.slice(-10);
+    }
+
+    // Inject memory as system message
+    if (memory) {
+      safeMessages = [
+        {
+          role: 'system',
+          content: `ROLEPLAY MEMORY:\n${memory}`
+        },
+        ...safeMessages
+      ];
+    }
+
+    console.log(
+      'Final messages:',
+      safeMessages.length,
+      'Payload:',
+      Buffer.byteLength(JSON.stringify(safeMessages)) / 1024,
+      'KB'
+    );
+
+    // ===== CONTINUE WITH YOUR EXISTING NIM REQUEST =====
 
     
     // Smart model selection with fallback
