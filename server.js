@@ -74,7 +74,7 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
           headers: { Authorization: `Bearer ${process.env.NIM_API_KEY}`,
                      'Content-Type': 'application/json' },
           validateStatus: s => s < 500
-        }).then(r => { if (r.status >= 200 && r.status < 300) nimModel = model; });
+        }).then(r => { if (r.status >= 200 && r.status < 300) nimModel = model;
       } catch (_) {}
       if (!nimModel) {
         const lc = model.toLowerCase();
@@ -232,7 +232,7 @@ async function streamToClient(req, res) {
     upstream.data.on('error', err => {
       console.error('Upstream stream error:', err);
       res.end();
-    });
+  
   } catch (err) {
     console.error('Streaming proxy error:', err);
     res.status(err.response?.status || 500).json({
