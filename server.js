@@ -42,7 +42,6 @@ app.get('/health', (req, res) => {
     reasoning_display: SHOW_REASONING,
     thinking_mode: ENABLE_THINKING_MODE
   });
-});
 
 // ---------------------------------------------------
 //  Model list (OpenAI‑compatible)
@@ -55,7 +54,6 @@ app.get('/v1/models', (req, res) => {
     owned_by: 'nvidia-nim-proxy'
   }));
   res.json({ object: 'list', data: models });
-});
 
 // ---------------------------------------------------
 //  1️⃣  NON‑STREAM route (has the JSON parser)
@@ -155,8 +153,6 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
                type: 'invalid_request_error',
                code: error.response?.status || 500 }
     });
-  }   // ← closes the try / catch block
-});   // ← closes the *non‑stream* route handler
 
 // ---------------------------------------------------
 //  2️⃣  STREAMING‑ONLY route (bypasses any parser)
@@ -241,7 +237,6 @@ async function streamToClient(req, res) {
           res.write(line + '\n');
         }
       });
-    });
 
     // When the upstream stream ends, finish the response
     upstream.data.on('end', () => res.end());
@@ -272,7 +267,6 @@ app.get('/v1/models', (req, res) => {
     owned_by: 'nvidia-nim-proxy'
   }));
   res.json({ object: 'list', data: models });
-});
 
 // ---------------------------------------------------
 //  Catch‑all for unknown endpoints
@@ -283,7 +277,6 @@ app.all('*', (req, res) => {
              type: 'invalid_request_error',
              code: 404 }
   });
-});
 
 // ---------------------------------------------------
 //  Start the server
