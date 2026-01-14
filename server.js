@@ -5,12 +5,10 @@ const express   = require('express');
 const cors      = require('cors');
 const axios     = require('axios');
 
+// ---------------------------------------------------
+//  App setup
+// ---------------------------------------------------
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-// ---------------------------------------------------
-//  Middleware
-// ---------------------------------------------------
 app.use(cors());
 
 // ---------------------------------------------------
@@ -19,8 +17,8 @@ app.use(cors());
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY   = process.env.NIM_API_KEY;
 
-const SHOW_REASONING = false;   // toggle reasoning display
-const ENABLE_THINKING_MODE = false; // enables thinking mode
+const SHOW_REASONING = false;          // toggle reasoning display
+const ENABLE_THINKING_MODE = false;    // enable thinking mode
 
 const MODEL_MAPPING = {
   'gpt-3.5-turbo'      : 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
@@ -29,8 +27,8 @@ const MODEL_MAPPING = {
   'gpt-4o'             : 'deepseek-ai/deepseek-v3.1',
   'claude-3-opus'      : 'openai/gpt-oss-120b',
   'claude-3-sonnet'    : 'openai/gpt-oss-20b',
-  'gemini-pro'         : 'qwen/qwen3-next-80b-a3b-thinking' 
-});
+  'gemini-pro'         : 'qwen/qwen3-next-80b-a3b-thinking'
+};
 
 // ---------------------------------------------------
 //  Health check
@@ -41,6 +39,8 @@ app.get('/health', (req, res) => {
     service: 'OpenAI → NVIDIA NIM Proxy',
     reasoning_display: SHOW_REASONING,
     thinking_mode: ENABLE_THINKING_MODE
+  });
+});
 
 // ---------------------------------------------------
 //  Model list (OpenAI‑compatible)
@@ -51,22 +51,21 @@ app.get('/v1/models', (req, res) => {
     object: 'model',
     created: Date.now(),
     owned_by: 'nvidia-nim-proxy'
-  }));
-  res.json({ object: 'list', data: models 
+  });
+  res.json({ object: 'list', data: models });
+});
 
 // ---------------------------------------------------
-//  1️⃣  NON‑STREAM route (has the JSON parser)
+//  1️⃣  Non‑stream route (has the JSON parser)
 // ---------------------------------------------------
-const jsonParser = express.json({ limit: '5mb' ;   // adjust if you need a larger limit
+const jsonParser = express.json({ limit: '5mb' });   // increase limit if you need it
 
 app.post('/v1/chat/completions', jsonParser, async (req, res) => {
-  // ----------------------------------------------------------------
-  //  INSERT YOUR ORIGINAL NON‑STREAM LOGIC HERE
-  // ----------------------------------------------------------------
+  // --------------------------- YOUR ORIGINAL LOGIC ---------------------------
   try {
     const { model, messages, temperature, max_tokens, stream } = req.body;
 
-    // ----- Smart model selection with fallback -----------------------
+    // ----- Model selection & fallback -------------------------------
     let nimModel = MODEL_MAPPING[model];
     if (!nimModel) {
       try {
@@ -78,7 +77,7 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
           headers: { Authorization: `Bearer ${process.env.NIM_API_KEY}`,
                      'Content-Type': 'application/json' },
           validateStatus: s => s < 500
-        }).then(r => { if (r.status >= 200 && r.status < 300) nimModel = model;
+        }).then(r => { if (r.status >= 200 && r.status < 300) nimModel = model; });
       } catch (_) {}
       if (!nimModel) {
         const lc = model.toLowerCase();
@@ -92,7 +91,7 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
       }
     }
 
-    // ----- Build the request we will send to NVIDIA NIM -------------
+    // ----- Build the request for NIM -------------------------------
     const nimRequest = {
       model: nimModel,
       messages: messages,
@@ -102,7 +101,7 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
       stream: stream || false
     };
 
-    // ----- Call the NVIDIA NIM API --------------------------------
+    // ----- Call NVIDIA NIM -----------------------------------------
     const response = await axios.post(
       `${NIM_API_BASE}/chat/completions`,
       nimRequest,
@@ -113,9 +112,7 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
       }
     );
 
-    // ----------------------------------------------------------------
-    //  Pure JSON (non‑stream) response
-    // ----------------------------------------------------------------
+    // ---------- Pure JSON (non‑stream) response --------------------
     if (!stream) {
       const openaiResponse = {
         id: `chatcmpl-${Date.now()}`,
@@ -139,30 +136,31 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
       return;
     }
 
-    // ----------------------------------------------------------------
-    //  STREAMING path – we should never reach here because the
-    //  `stream` flag is handled above, but we keep the logic for safety.
-    // ----------------------------------------------------------------
-    // (you can copy your existing streaming code here if you wish)
-    
+    // If we reach here the request asked for a stream but we already handled it.
+    // Just call the streaming helper (or copy your streaming logic here).
+    await streamToClient(req, res);
   } catch (error) {
     console.error('Proxy error:', error.message);
     res.status(error.response?.status || 500).json({
-      error: { message: error.message || 'Internal server error',
-               type: 'invalid_request_error',
-               code: error.response?.status || 500 }
-  
+      error: {
+        message: error.message || 'Internal server error',
+        type: 'invalid_request_error',
+        code: error.response?.status || 500
+      }
+    });
+  }   // <-- closes the try / catch block
 
 // ---------------------------------------------------
-//  2️⃣  STREAMING‑ONLY route (bypasses any parser)
+//  2️⃣  Streaming‑only route (bypasses any parser)
 // ---------------------------------------------------
 app.post('/v1/chat/completions', async (req, res) => {
   if (req.query.stream === 'true') {
     await streamToClient(req, res);   // helper defined below
     return;
   }
-  // If there is no `stream` flag we simply ignore the request;
-  // it will be handled by the non‑stream handler above.   // ← closes the *streaming‑only* route handler
+  // If there is no `stream` flag we simply ignore the request.
+  // It will be handled by the non‑stream handler above.
+});   // ← closes the streaming‑only route handler
 
 // ---------------------------------------------------
 //  3️⃣  Helper that streams data from NIM → client
@@ -172,7 +170,7 @@ async function streamToClient(req, res) {
     // Raw request body (no JSON parsing has happened yet)
     const { messages, temperature, max_tokens } = req.body;
 
-    // Call the NVIDIA NIM API with streaming enabled
+    // Call NVIDIA NIM with streaming enabled
     const upstream = await axios.post(
       `${process.env.NIM_API_BASE}/chat/completions`,
       { messages, temperature, max_tokens, stream: true },
@@ -184,13 +182,13 @@ async function streamToClient(req, res) {
       }
     );
 
-    // --- SSE‑compatible headers (Render/Nginx friendly) ---
+    // ---- SSE‑compatible headers (Render/Nginx friendly) ----
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('Transfer-Encoding', 'chunked');
 
-    // ----- Pipe the upstream stream chunk‑by‑chunk -----
+    // ----- Pipe chunks, merge reasoning if desired -----
     let buffer = '';
     let reasoningStarted = false;
 
@@ -202,7 +200,6 @@ async function streamToClient(req, res) {
       lines.forEach(line => {
         if (!line.startsWith('data: ')) return;
 
-        // Forward the termination marker verbatim
         if (line.includes('[DONE]')) {
           res.write(line + '\n\n');
           return;
@@ -211,7 +208,7 @@ async function streamToClient(req, res) {
         try {
           const data = JSON.parse(line.slice(6)); // strip "data: "
 
-          // Merge reasoning into the content field if SHOW_REASONING is on
+          // OPTIONAL: merge reasoning into the delta.content field
           if (SHOW_REASONING && data.choices?.[0]?.delta) {
             const reasoning = data.choices[0].delta.reasoning_content;
             const content   = data.choices[0].delta.content;
@@ -231,31 +228,30 @@ async function streamToClient(req, res) {
 
           res.write(`data: ${JSON.stringify(data)}\n\n`);
         } catch (_) {
-          // If the line isn’t valid JSON just forward it as‑is
+          // malformed line – just forward it unchanged
           res.write(line + '\n');
         }
-     
+      });
+    });
 
-    // When the upstream stream ends, finish the response
     upstream.data.on('end', () => res.end());
-
-    // Forward any upstream errors
     upstream.data.on('error', err => {
       console.error('Upstream stream error:', err);
       res.end();
-  
+    });
   } catch (err) {
     console.error('Streaming proxy error:', err);
     res.status(err.response?.status || 500).json({
       error: { message: err.message || 'Streaming proxy failed',
                type: 'internal_error',
                code: err.response?.status || 500 }
-
+      }
+    );
   }
 }
 
 // ---------------------------------------------------
-//  Model list (again – both routes share the same list)
+//  Model list (used by both routes)
 // ---------------------------------------------------
 app.get('/v1/models', (req, res) => {
   const models = Object.keys(MODEL_MAPPING).map(m => ({
@@ -263,7 +259,9 @@ app.get('/v1/models', (req, res) => {
     object: 'model',
     created: Date.now(),
     owned_by: 'nvidia-nim-proxy'
-  res.json({ object: 'list', data: models 
+  });
+  res.json({ object: 'list', data: models });
+});
 
 // ---------------------------------------------------
 //  Catch‑all for unknown endpoints
@@ -273,6 +271,8 @@ app.all('*', (req, res) => {
     error: { message: `Endpoint ${req.path} not found`,
              type: 'invalid_request_error',
              code: 404 }
+          };
+});
 
 // ---------------------------------------------------
 //  Start the server
