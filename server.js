@@ -157,26 +157,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       'KB'
     );
 
-    // ===== CONTINUE WITH YOUR EXISTING NIM REQUEST =====
-
-    
-    // Smart model selection with fallback
-    let nimModel = MODEL_MAPPING[model];
-    if (!nimModel) {
-      try {
-        await axios.post(`${NIM_API_BASE}/chat/completions`, {
-          model: model,
-          messages: [{ role: 'user', content: 'test' }],
-          max_tokens: 1
-        }, {
-          headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
-          validateStatus: (status) => status < 500
-        }).then(res => {
-          if (res.status >= 200 && res.status < 300) {
-            nimModel = model;
-          }
-        });
-      } catch (e) {}
+    catch (e) {}
       
       if (!nimModel) {
         const modelLower = model.toLowerCase();
