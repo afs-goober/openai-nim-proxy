@@ -349,17 +349,31 @@ async function streamToClient(req, res) {
               res.write(`data: ${JSON.stringify(data)}\\n\\n`);
             } catch (e) {
               res.write(line + '\\n');
-            }
-          }
-        });
+         try {
+  // ──────────────────────────────────────────────────────────────
+  //  ←  ALL OF YOUR REQUEST‑HANDLING CODE THAT MAY THROW  (axios,
+  //    model‑selection, building the nimRequest, etc.)
+  //  →  everything you already have before the line that currently
+  //      reads “} else {”
+  // ───────────────────────────────────────────────────────────────
+
+      //  <-- the code that currently lives here (your `else` block)
+      //      e.g. the streaming‑fallback logic that begins with
+      //      `} else {`
+      // (keep it exactly as it was, just make sure it is still
+      //  inside this try block)
+
+    } catch (error) {
+      console.error('Proxy error:', error.message);
+      res.status(error.response?.status || 500).json({
+        error: {
+          message: error.message || 'Internal server error',
+          type: 'invalid_request_error',
+          code: error.response?.status || 500
+        }
       });
-      
-      response.data.on('end', () => res.end());
-      response.data.on('error', (err) => {
-        console.error('Stream error:', err);
-        res.end();
-      });
-    } else {
+    }   // ← closes the try / catch block
+
       // Transform NIM response to OpenAI format with reasoning
       const openaiResponse = {
         id: `chatcmpl-${Date.now()}`,
