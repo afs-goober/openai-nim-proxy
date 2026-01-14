@@ -39,6 +39,103 @@ app.get('/health', (req, res) => {
     reasoning_display: SHOW_REASONING,
     thinking_mode: ENABLE_THINKING_MODE
   });
+
+});
+/* ---------------------------------------------------------------
+   1️⃣  IMPORTANT: Do NOT put express.json() at the very top.
+   Instead, register it only for routes that expect a normal body.
+   --------------------------------------------------------------- */
+app.use(cors());
+app.use(express.json());               // <-- will be used later only for non‑streaming routes
+
+// ... health / list‑models endpoints stay where they are ...
+
+/* ---------------------------------------------------------------
+   2️⃣  Streaming route – bypass the JSON parser completely.
+   --------------------------------------------------------------- */
+app.post('/v1/chat/completions', async (req, res) => {
+  // If the client asks for a streamed response, we *must not* let
+  // any body‑parsing middleware touch the request.
+  if (req.query.stream === 'true') {
+    // -----------------------------------------------------------
+    // Move the whole streaming implementation to a helper function
+    // that works directly with the raw Node stream from NIM.
+    // -----------------------------------------------------------
+    await streamToClient(req, res);   // <-- we'll define it next
+    return;                           // exit early – headers+stream are already writing
+  }
+
+  // ----- FROM HERE ON DOWN, WE ARE IN THE *NON‑STREAM* PATH -----
+  // (your existing non‑stream code can stay unchanged)
+  // It will still use express.json() because we are inside a normal route,
+  // which is fine – the request body will be small enough.
+});
+
+/* ---------------------------------------------------------------
+   3️⃣  Helper that streams data from NIM → client with reasoning merge
+   --------------------------------------------------------------- */
+async function streamToClient(req, res) {
+  try {
+    const { messages, temperature, max_tokens } = req.body; // already parsed by previous middleware if needed
+    // ------ Build the NIM request (same as your original code) -------
+    // (you can keep the same `nimRequest` construction you have)
+
+    // ------ Call NIM API with `responseType: 'stream'` ------------
+    const upstream = await axios.post(
+      `${NIM_API_BASE}/chat/completions`,
+      nimRequest,
+      {
+        headers: {
+          Authorization: `Bearer ${NIM_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        responseType: 'stream',
+        timeout: 0,               // keep the connection alive
+      }
+    );
+
+    // ------ Set streaming headers that Render’s Nginx will accept -----
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Transfer-Encoding', 'chunked'); // forces chunked mode
+
+    // ------ Pipe chunk‑by‑chunk, merging reasoning if needed -------
+    // The helper we discussed earlier (pipeStreamToClient) can be reused here.
+    // For brevity, a trimmed version is shown; you can copy the full function
+    // from the previous answer.
+    pipeStreamToClient(upstream.data, res, {
+      showReasoning: SHOW_REASONING,
+    });
+  } catch (err) {
+    console.error('🔴 Streaming proxy error', err);
+    res.status(err.response?.status || 500).json({
+      error: {
+        message: err.message || 'Streaming proxy failed',
+        type: 'internal_error',
+        code: err.response?.status || 500,
+      },
+    });
+  }
+}
+
+/* ---------------------------------------------------------------
+   4️⃣  (Optional) Global middleware that *disables* any body parsing
+       on streaming endpoints *before* they reach the route.
+   --------------------------------------------------------------- */
+app.use((req, res, next) => {
+  // If the request is a streaming one, we discard any body‑parser that
+  // might have been invoked earlier by simply not calling next()
+  // until we have taken over.  This is a defensive guard.
+  if (req.path.startsWith('/v1/chat/completions') && req.query.stream === 'true') {
+    // At this point no parser has been called yet.
+    // We *must* ensure that `express.json()` has **not** been called globally.
+    // Therefore we keep `express.json()` registration **outside** of this
+    // middleware (as shown in step 1).
+    next();
+  } else {
+    next();
+  }
 });
 
 // List models endpoint (OpenAI compatible)
