@@ -254,7 +254,7 @@ app.get('/v1/models', (req, res) => {
     created: Date.now(),
     owned_by: 'nvidia-nim-proxy'
 
-  res.json({ object: 'list', data: models });
+  res.json({ object: 'list', data: models })
 
 // ---------------------------------------------------
 //  Catch‑all for unknown endpoints
