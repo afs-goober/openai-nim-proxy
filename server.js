@@ -1,7 +1,7 @@
 // ========================================================
 //  server.js – OpenAI → NVIDIA NIM API Proxy
 // ========================================================
-const express   = require('express');
+const express = require('express');
 const cors      = require('cors');
 const axios     = require('axios');
 
@@ -19,8 +19,8 @@ app.use(cors());
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY   = process.env.NIM_API_KEY;
 
-const SHOW_REASONING = false;          // toggle reasoning display
-const ENABLE_THINKING_MODE = false;    // enable thinking mode
+const SHOW_REASONING                 = false;                     // toggle reasoning display
+const ENABLE_THINKING_MODE = false;                               // enable thinking mode
 
 const MODEL_MAPPING = {
   'gpt-3.5-turbo'      : 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
@@ -30,7 +30,7 @@ const MODEL_MAPPING = {
   'claude-3-opus'      : 'openai/gpt-oss-120b',
   'claude-3-sonnet'    : 'openai/gpt-oss-20b',
   'gemini-pro'         : 'qwen/qwen3-next-80b-a3b-thinking' 
-});
+);
 
 // ---------------------------------------------------
 //  Health check
@@ -43,15 +43,30 @@ app.get('/v1/models', (req, res) => {
     owned_by: 'nvidia-nim-proxy'
   });
   res.json({ object: 'list', data: models });
-});
+ });
 
-// ---------------------------------------------------
-//  1️⃣  Non‑stream route (has the JSON parser)
-// ---------------------------------------------------
-const jsonParser = express.json({ limit: '5mb' });   // adjust limit if you need a larger limit
+ // ---------------------------------------------------
+ //  Health check
+ // ---------------------------------------------------
+app.get('/v1/models', (req, res) => {
+  const models = Object.keys(MODEL_MAPPING).map(m => ({
+    id: m,
+    object: 'model',
+    created: Date.now(),
+    owned_by: 'nvidia-nim-proxy'
+  });
+  res.json({ object: 'list', data: models });
+ });
+
+ // ---------------------------------------------------
+ //  1️⃣  Non‑stream route (has the JSON parser)
+ // ---------------------------------------------------
+ const jsonParser = express.json({ limit: '5mb' });   // adjust limit if needed
 
 app.post('/v1/chat/completions', jsonParser, async (req, res) => {
-  // ---------- INSERT YOUR ORIGINAL NON‑STREAM LOGIC HERE ----------
+  // ----------------------------------------------------------------
+  //  INSERT YOUR ORIGINAL NON‑STREAM LOGIC HERE
+  // ---------------------------------------------------------------
   try {
     const { model, messages, temperature, max_tokens, stream } = req.body;
 
@@ -66,7 +81,7 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
         }, {
           headers: { Authorization: `Bearer ${process.env.NIM_API_KEY}`,
                      'Content-Type': 'application/json' },
-          validateStatus: (s) => s < 500
+          validateStatus: s => s < 500
         }).then(r => { if (r.status >= 200 && r.status < 500) nimModel = model; });
       } catch (_) {}
       if (!nimModel) {
@@ -80,7 +95,7 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
         }
       }
     
-    // ----- Build the request to NIM ---------------------------------
+    // ----- Build the NIM request -------------------------------
     const nimRequest = {
       model: nimModel,
       messages: messages,
@@ -90,7 +105,7 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
       stream: stream || false
     };
 
-    // ----- Call NIM -----------------------------------------------
+    // ----- Call NIM ---------------------------------------------------
     const response = await axios.post(
       `${NIM_API_BASE}/chat/completions`,
       nimRequest,
@@ -101,7 +116,7 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
       }
     );
 
-    // ---------- Non‑stream (JSON) response -----------------------
+    // ---------- Non‑stream (JSON) response -------------------
     if (!stream) {
       const openaiResponse = {
         id: `chatcmpl-${Date.now()}`,
@@ -125,11 +140,11 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
       return;
     
     // -------------------------------------------------------------
-    // If we get here the request asked for a stream but the
-    // non‑stream handler already handled it – just call the helper.
+    //  (We never reach this block for a non‑stream request;
+    //   if we do, just call the streaming helper.)
     // -------------------------------------------------------------
     await streamToClient(req, res);
-  } catch (error) {
+   } catch (error) {
     console.error('Proxy error:', error.message);
     res.status(error.response?.status || 500).json({
       error: {
@@ -139,11 +154,11 @@ app.post('/v1/chat/completions', jsonParser, async (req, res) => {
       }
     });
    }   // ← closes the try / catch block
- }   // <-- closes the non‑stream route handler
+});   // <-- closes the non‑stream route handler
 
-// ---------------------------------------------------
-//  2️⃣  Streaming‑only route (bypasses any parser)
-// ---------------------------------------------------
+# ---------------------------------------------------
+#  2️⃣  Streaming‑only route (bypasses any parser)
+# ---------------------------------------------------
 app.post('/v1/chat/completions', async (req, res) => {
   if (req.query.stream === 'true') {
     await streamToClient(req, res);   // helper defined below
@@ -153,9 +168,9 @@ app.post('/v1/chat/completions', async (req, res) => {
   // it will be handled by the non‑stream handler above.
 });   // ← closes the streaming‑only route handler
 
-// ---------------------------------------------------
-//  3️⃣  Helper that streams data from NIM → client
-// ---------------------------------------------------
+# ---------------------------------------------------
+#  3️⃣  Helper that streams data from NIM → client
+# ---------------------------------------------------
 async function streamToClient(req, res) {
   try {
     // Raw request body (no JSON parsing has happened yet)
@@ -171,9 +186,12 @@ async function streamToClient(req, res) {
         responseType: 'stream',
         timeout: 0
       }
-    );
-
-    // ----- SSE‑compatible headers (Render/Nginx friendly) -----
+     ).catch(err => {
+        console.error('NIM request failed:', err.message);
+        throw err;
+      }
+    
+    // ----- Set SSE‑compatible headers (Render/Nginx friendly) -----
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -199,8 +217,8 @@ async function streamToClient(req, res) {
 
         try {
           const data = JSON.parse(line.slice(6)); // strip "data: "
-
-          // Merge reasoning into the content field if SHOW_REASONING is on
+        
+          // OPTIONAL: merge reasoning into the content field
           if (SHOW_REASONING && data.choices?.[0]?.delta) {
             const reasoning = data.choices[0].delta.reasoning_content;
             const content   = data.choices[0].delta.content;
@@ -226,7 +244,7 @@ async function streamToClient(req, res) {
       });
     });
 
-    // When the upstream stream ends, close the response
+    // When the upstream stream ends, finish the response
     upstream.data.on('end', () => res.end());
 
     // Forward any upstream errors
@@ -240,41 +258,40 @@ async function streamToClient(req, res) {
       error: { message: err.message || 'Streaming proxy failed',
                type: 'internal_error',
                code: err.response?.status || 500 }
-      }
     });
-  }   // ← closes the async function `streamToClient`
+  }
+}
 
- // ---------------------------------------------------
- //  4️⃣  List of available models (shared by both routes)
- // ---------------------------------------------------
- app.get('/v1/models', (req, res) => {
-   const models = Object.keys(MODEL_MAPPING).map(m => ({
-     id: m,
-     object: 'model',
-     created: Date.now(),
-     owned_by: 'nvidia-nim-proxy'
-   });
-   res.json({ object: 'list', data: models });
+// ---------------------------------------------------
+//  Model list (shared by both routes)
+// ---------------------------------------------------
+app.get('/v1/models', (req, res) => {
+  const models = Object.keys(MODEL_MAPPING).map(m => ({
+    id: m,
+    object: 'model',
+    created: Date.now(),
+    owned_by: 'nvidia-nim-proxy'
+  });
+  res.json({ object: 'list', data: models });
  });
 
- // ---------------------------------------------------
- //  Catch‑all for unknown endpoints
- // ---------------------------------------------------
- app.all('*', (req, res) => {
-   res.status(404).json({
-     error: { message: `Endpoint ${req.path} not found`,
-              type: 'invalid_request_error',
-              code: 404 }
-   });
+ # ---------------------------------------------------
+#  Catch‑all for unknown endpoints
+# ---------------------------------------------------
+app.all('*', (req, res) => {
+  res.status(404).json({
+    error: { message: `Endpoint ${req.path} not found`,
+             type: 'invalid_request_error',
+             code: 404 }
+  });
  });
 
- // ---------------------------------------------------
- //  5️⃣  Start the server
- // ---------------------------------------------------
- const PORT = process.env.PORT || 3000;
- app.listen(PORT, () => {
-   console.log(`OpenAI → NVIDIA NIM Proxy running on port ${PORT}`);
-   console.log(`Health check: http://localhost:${PORT}/health`);
-   console.log(`Reasoning display: ${SHOW_REASONING ? 'ENABLED' : 'DISABLED'}`);
-   console.log(`Thinking mode: ${ENABLE_THINKING_MODE ? 'ENABLED' : 'DISABLED'}`);
- });
+# ---------------------------------------------------
+#  Start the server
+# ---------------------------------------------------
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`OpenAI → NVIDIA NIM Proxy running on port ${PORT}`);
+  console.log(`Health check: http://localhost:${PORT}/health`);
+  console.log(`Reasoning display: ${SHOW_REASONING ? 'ENABLED' : 'DISABLED'}`);
+  console.log(`Thinking mode: ${ENABLE_THINKING_MODE ? 'ENABLED' : 'DISABLED'}`);
