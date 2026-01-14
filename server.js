@@ -8,7 +8,7 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
 // NVIDIA NIM API configuration
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
@@ -60,6 +60,24 @@ app.get('/v1/models', (req, res) => {
 app.post('/v1/chat/completions', async (req, res) => {
   try {
     const { model, messages, temperature, max_tokens, stream } = req.body;
+    // 🔥 HARD TRIM to prevent Render 413 errors
+let safeMessages = messages || [];
+
+// Keep only last 12 messages (adjust if needed)
+const MAX_MESSAGES = 12;
+
+if (safeMessages.length > MAX_MESSAGES) {
+  safeMessages = safeMessages.slice(-MAX_MESSAGES);
+}
+
+// Log payload size for debugging
+console.log(
+  'Message count:', safeMessages.length,
+  'Payload size:',
+  Buffer.byteLength(JSON.stringify(safeMessages)) / 1024,
+  'KB'
+);
+
     
     // Smart model selection with fallback
     let nimModel = MODEL_MAPPING[model];
@@ -94,9 +112,9 @@ app.post('/v1/chat/completions', async (req, res) => {
     // Transform OpenAI request to NIM format
     const nimRequest = {
       model: nimModel,
-      messages: messages,
+      messages: safeMessages,
       temperature: temperature || 0.6,
-      max_tokens: max_tokens || 9024,
+      max_tokens: Math.min(max_tokens || 2048, 2048),
       extra_body: ENABLE_THINKING_MODE ? { chat_template_kwargs: { thinking: true } } : undefined,
       stream: stream || false
     };
