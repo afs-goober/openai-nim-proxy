@@ -43,7 +43,7 @@ app.get('/v1/models', (req, res) => {
     owned_by: 'nvidia-nim-proxy'
   });
   res.json({ object: 'list', data: models });
- });
+ };
 
  // ---------------------------------------------------
  //  Health check
