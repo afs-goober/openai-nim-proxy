@@ -405,15 +405,16 @@ async function streamToClient(req, res) {
       
       res.json(openaiResponse);
     
-try {
-  // <-- put everything that was inside the broken block here
-  // (including the `else` clause you posted)
-} catch (error) {
-  console.error('Proxy error:', error.message);
-  …
-}
+    } else {
+      // ----  KEEP YOUR ORIGINAL ELSE‑BLOCK LOGIC HERE  ----
+      // (the code that was already inside this else‑block;
+      //  do NOT modify it – just leave it exactly as it was)
+      // -------------------------------------------------------
+      // (no extra } or ) here)
+    }   // <-- closes the else‑block that you just kept
 
-    
+  } catch (error) {                               // <-- THIS catch now has a matching try above it
+    console.error('Proxy error:', error.message);
     res.status(error.response?.status || 500).json({
       error: {
         message: error.message || 'Internal server error',
@@ -421,8 +422,10 @@ try {
         code: error.response?.status || 500
       }
     });
-  }
-});
+  }   // <-- closes the try / catch block
+
+});   // <-- closes the non‑stream route handler
+
 
 // Catch-all for unsupported endpoints
 app.all('*', (req, res) => {
