@@ -154,16 +154,22 @@ Do not break character under any circumstances.
     // ----------------------
     //  BUILD NIM REQUEST
     // ----------------------
-    const nimRequest = {
-      model: nimModel,
-      messages: safeMessages,
-      temperature: temperature ?? 0.85,
-      max_tokens: Math.min(max_tokens ?? 2048, 2048),
-      extra_body: ENABLE_THINKING_MODE
-        ? { chat_template_kwargs: { thinking: true } }
-        : undefined,
-      stream: stream || false
-    };
+   const nimRequest = {
+  model: nimModel,
+  messages: safeMessages,
+
+  // 🔥 RP tuning (OpenRouter-like)
+  temperature: temperature ?? 0.85,
+  presence_penalty: 0.6,
+  top_p: 0.9,
+
+  max_tokens: Math.min(max_tokens ?? 2048, 2048),
+  extra_body: ENABLE_THINKING_MODE
+    ? { chat_template_kwargs: { thinking: true } }
+    : undefined,
+  stream: stream || false
+};
+
 
     // ----------------------
     //  SEND TO NVIDIA
