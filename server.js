@@ -1,4 +1,4 @@
-// server.js - OpenAI to NVIDIA NIM API Proxy (Janitor RP Safe + 413 Protected)
+// server.js - OpenAI to NVIDIA NIM API Proxy (Janitor RP Safe + 413 Protected + OpenRouter-like Layer + Dynamic Auto-Regeneration)
 
 const express = require('express');
 const cors = require('cors');
@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 3000;
 //  Middleware (413 SAFE)
 // ======================
 app.use(cors());
-app.use(express.json({ limit: '1mb' })); // Render request limit protection
+app.use(express.json({ limit: '1mb' }));
 
 // ======================
 //  NVIDIA NIM CONFIG
@@ -26,10 +26,12 @@ const SHOW_REASONING = false;
 const ENABLE_THINKING_MODE = false;
 
 // ======================
-//  SAFE LIMITS (IMPORTANT)
+//  SAFE LIMITS
 // ======================
 const MAX_MESSAGES = 80;          // Long memory without summaries
 const MAX_MESSAGE_CHARS = 8000;   // Prevent single-message 413 nukes
+const MIN_RESPONSE_TOKENS = 50;   // Minimal OpenRouter-like response
+const MAX_RETRIES = 5;            // Max auto-regeneration attempts (dynamic)
 
 // ======================
 //  MODEL MAPPING
@@ -74,6 +76,38 @@ app.get('/v1/models', (req, res) => {
 });
 
 // ======================
+//  HELPER: Dynamic Auto-Regeneration
+// ======================
+async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
+  const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
+    headers: {
+      Authorization: `Bearer ${NIM_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    responseType: nimRequest.stream ? 'stream' : 'json'
+  });
+
+  if (!nimRequest.stream) {
+    // Examine first choice for “alive enough”
+    const choice = response.data.choices[0];
+    let content = choice.message?.content || '';
+
+    const wordCount = content.split(/\s+/).length;
+    const hasAction = content.includes('*');
+
+    // Determine if retry is needed
+    if ((wordCount < MIN_RESPONSE_TOKENS || !hasAction) && attempt < MAX_RETRIES) {
+      console.log(`Dynamic auto-regeneration triggered (attempt ${attempt + 1})`);
+      // Slightly adjust temperature for variation
+      const newRequest = { ...nimRequest, temperature: Math.min((nimRequest.temperature ?? 0.85) + 0.05, 1.0) };
+      return await requestNimWithDynamicRetry(newRequest, attempt + 1);
+    }
+  }
+
+  return response;
+}
+
+// ======================
 //  CHAT COMPLETIONS
 // ======================
 app.post('/v1/chat/completions', async (req, res) => {
@@ -86,21 +120,17 @@ app.post('/v1/chat/completions', async (req, res) => {
     let nimModel = MODEL_MAPPING[model];
     if (!nimModel) {
       const m = model.toLowerCase();
-      if (m.includes('405b') || m.includes('gpt-4')) {
-        nimModel = 'meta/llama-3.1-405b-instruct';
-      } else if (m.includes('70b') || m.includes('claude') || m.includes('gemini')) {
-        nimModel = 'meta/llama-3.1-70b-instruct';
-      } else {
-        nimModel = 'meta/llama-3.1-8b-instruct';
-      }
+      if (m.includes('405b') || m.includes('gpt-4')) nimModel = 'meta/llama-3.1-405b-instruct';
+      else if (m.includes('70b') || m.includes('claude') || m.includes('gemini')) nimModel = 'meta/llama-3.1-70b-instruct';
+      else nimModel = 'meta/llama-3.1-8b-instruct';
     }
 
     // ----------------------
     //  HARD ROLEPLAY LOCK
     // ----------------------
     const roleplayLock = {
-  role: 'system',
-  content: `
+      role: 'system',
+      content: `
 You are a fictional character in an ongoing roleplay.
 
 Roleplay style rules:
@@ -113,6 +143,7 @@ Roleplay style rules:
 - Inner thoughts may be shown sparingly using italics
 - Dialogue should feel natural and emotionally expressive
 - Scene descriptions are allowed as long as they remain in character
+- Avoid one-line replies; continue the scene naturally
 
 Knowledge rules:
 - Only use information that exists within this conversation
@@ -121,15 +152,12 @@ Knowledge rules:
 
 Do not break character under any circumstances.
 `
-};
-
+    };
 
     // ----------------------
     //  VALIDATE + CLAMP
     // ----------------------
     let safeMessages = Array.isArray(messages) ? messages : [];
-
-    // Per-message size guard (critical for 413 prevention)
     safeMessages = safeMessages.map(m => {
       if (typeof m?.content === 'string' && m.content.length > MAX_MESSAGE_CHARS) {
         return { ...m, content: m.content.slice(0, MAX_MESSAGE_CHARS) };
@@ -137,11 +165,7 @@ Do not break character under any circumstances.
       return m;
     });
 
-    // Message count trimming (no summaries)
-    if (safeMessages.length > MAX_MESSAGES) {
-      safeMessages = safeMessages.slice(-MAX_MESSAGES);
-    }
-
+    if (safeMessages.length > MAX_MESSAGES) safeMessages = safeMessages.slice(-MAX_MESSAGES);
     safeMessages = [roleplayLock, ...safeMessages];
 
     console.log(
@@ -154,37 +178,23 @@ Do not break character under any circumstances.
     // ----------------------
     //  BUILD NIM REQUEST
     // ----------------------
-   const nimRequest = {
-  model: nimModel,
-  messages: safeMessages,
-
-  // 🔥 RP tuning (OpenRouter-like)
-  temperature: temperature ?? 0.85,
-  presence_penalty: 0.6,
-  top_p: 0.9,
-
-  max_tokens: Math.min(max_tokens ?? 2048, 2048),
-  extra_body: ENABLE_THINKING_MODE
-    ? { chat_template_kwargs: { thinking: true } }
-    : undefined,
-  stream: stream || false
-};
-
+    const nimRequest = {
+      model: nimModel,
+      messages: safeMessages,
+      temperature: temperature ?? 0.85,
+      presence_penalty: 0.6,
+      top_p: 0.9,
+      max_tokens: Math.min(max_tokens ?? 2048, 2048),
+      extra_body: ENABLE_THINKING_MODE
+        ? { chat_template_kwargs: { thinking: true } }
+        : undefined,
+      stream: stream || false
+    };
 
     // ----------------------
-    //  SEND TO NVIDIA
+    //  SEND TO NVIDIA WITH DYNAMIC AUTO-RETRY
     // ----------------------
-    const response = await axios.post(
-      `${NIM_API_BASE}/chat/completions`,
-      nimRequest,
-      {
-        headers: {
-          Authorization: `Bearer ${NIM_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        responseType: stream ? 'stream' : 'json'
-      }
-    );
+    const response = await requestNimWithDynamicRetry(nimRequest);
 
     // ----------------------
     //  STREAMING RESPONSE
@@ -214,6 +224,13 @@ Do not break character under any circumstances.
             if (delta) {
               delete delta.reasoning_content;
               delta.content = delta.content || '';
+
+              if (delta.content.split(' ').length < MIN_RESPONSE_TOKENS) {
+                delta.content += "\n\n*Continues the scene naturally*";
+              }
+              if (!delta.content.includes('*')) {
+                delta.content = "*Performs action*\n" + delta.content;
+              }
             }
             res.write(`data: ${JSON.stringify(data)}\n\n`);
           } catch {
@@ -232,19 +249,29 @@ Do not break character under any circumstances.
       // ----------------------
       //  NORMAL RESPONSE
       // ----------------------
+      const enhancedChoices = response.data.choices.map(choice => {
+        let content = choice.message?.content || '';
+
+        if (content.split(' ').length < MIN_RESPONSE_TOKENS) {
+          content += "\n\n*Continues the scene naturally*";
+        }
+        if (!content.includes('*')) {
+          content = "*Performs action*\n" + content;
+        }
+
+        return {
+          index: choice.index,
+          message: { role: choice.message.role, content },
+          finish_reason: choice.finish_reason
+        };
+      });
+
       res.json({
         id: `chatcmpl-${Date.now()}`,
         object: 'chat.completion',
         created: Math.floor(Date.now() / 1000),
         model,
-        choices: response.data.choices.map(choice => ({
-          index: choice.index,
-          message: {
-            role: choice.message.role,
-            content: choice.message.content || ''
-          },
-          finish_reason: choice.finish_reason
-        })),
+        choices: enhancedChoices,
         usage: response.data.usage || {}
       });
     }
