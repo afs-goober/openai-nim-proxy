@@ -165,12 +165,11 @@ async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
 // ======================
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-    const CHAT_ID = req.headers['x-chat-id'];
-    if (!CHAT_ID) {
-      return res.status(400).json({
-        error: { message: 'Missing x-chat-id header' }
-      });
-    }
+    const CHAT_ID = req.headers['x-chat-id'] || `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+if (!req.headers['x-chat-id']) {
+  console.warn('No x-chat-id provided, using temporary chat id:', CHAT_ID);
+}
 
     const { model, messages, temperature, max_tokens, stream } = req.body;
 
