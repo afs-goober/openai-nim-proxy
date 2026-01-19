@@ -1,4 +1,6 @@
-// server.js - OpenAI to NVIDIA NIM API Proxy (Janitor RP Safe + 413 Protected + OpenRouter-like Layer + Dynamic Auto-Regeneration)
+// server.js - OpenAI to NVIDIA NIM API Proxy
+// Janitor RP Safe + 413 Protected + OpenRouter-like Layer
+// + Dynamic Auto-Regeneration + Per-Chat Memory Summaries
 
 const express = require('express');
 const cors = require('cors');
@@ -28,10 +30,15 @@ const ENABLE_THINKING_MODE = false;
 // ======================
 //  SAFE LIMITS
 // ======================
-const MAX_MESSAGES = 80;          // Long memory without summaries
-const MAX_MESSAGE_CHARS = 8000;   // Prevent single-message 413 nukes
-const MIN_RESPONSE_TOKENS = 50;   // Minimal OpenRouter-like response
-const MAX_RETRIES = 5;            // Max auto-regeneration attempts (dynamic)
+const MAX_MESSAGES = 80;
+const MAX_MESSAGE_CHARS = 8000;
+const MIN_RESPONSE_TOKENS = 50;
+const MAX_RETRIES = 5;
+
+// ======================
+//  MEMORY / SUMMARY STORAGE (PER CHAT)
+// ======================
+const CHAT_SUMMARIES = new Map();
 
 // ======================
 //  MODEL MAPPING
@@ -54,9 +61,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     service: 'NIM Janitor RP Proxy',
     max_messages: MAX_MESSAGES,
-    max_message_chars: MAX_MESSAGE_CHARS,
-    reasoning_display: SHOW_REASONING,
-    thinking_mode: ENABLE_THINKING_MODE
+    max_message_chars: MAX_MESSAGE_CHARS
   });
 });
 
@@ -76,31 +81,79 @@ app.get('/v1/models', (req, res) => {
 });
 
 // ======================
+//  HELPER: RP SAFE SUMMARY
+// ======================
+async function summarizeChat(nimModel, messages) {
+  try {
+    const prompt = [
+      {
+        role: 'system',
+        content: `
+Summarize the following roleplay strictly in-universe.
+
+Rules:
+- Write as memories the character would personally remember
+- Preserve relationships, emotions, promises, conflicts, and goals
+- Do NOT mention AI, systems, summaries, or chats
+- Be concise but complete
+`
+      },
+      {
+        role: 'user',
+        content: messages.map(m => `${m.role}: ${m.content}`).join('\n')
+      }
+    ];
+
+    const res = await axios.post(
+      `${NIM_API_BASE}/chat/completions`,
+      {
+        model: nimModel,
+        messages: prompt,
+        temperature: 0.3,
+        max_tokens: 500
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${NIM_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    return res.data.choices[0].message.content;
+  } catch (err) {
+    console.error('Summary failed:', err.message);
+    return null;
+  }
+}
+
+// ======================
 //  HELPER: Dynamic Auto-Regeneration
 // ======================
 async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
-  const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
-    headers: {
-      Authorization: `Bearer ${NIM_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    responseType: nimRequest.stream ? 'stream' : 'json'
-  });
+  const response = await axios.post(
+    `${NIM_API_BASE}/chat/completions`,
+    nimRequest,
+    {
+      headers: {
+        Authorization: `Bearer ${NIM_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      responseType: nimRequest.stream ? 'stream' : 'json'
+    }
+  );
 
   if (!nimRequest.stream) {
-    // Examine first choice for “alive enough”
-    const choice = response.data.choices[0];
-    let content = choice.message?.content || '';
-
-    const wordCount = content.split(/\s+/).length;
+    const content = response.data.choices[0].message?.content || '';
+    const wc = content.split(/\s+/).length;
     const hasAction = content.includes('*');
 
-    // Determine if retry is needed
-    if ((wordCount < MIN_RESPONSE_TOKENS || !hasAction) && attempt < MAX_RETRIES) {
-      console.log(`Dynamic auto-regeneration triggered (attempt ${attempt + 1})`);
-      // Slightly adjust temperature for variation
-      const newRequest = { ...nimRequest, temperature: Math.min((nimRequest.temperature ?? 0.85) + 0.05, 1.0) };
-      return await requestNimWithDynamicRetry(newRequest, attempt + 1);
+    if ((wc < MIN_RESPONSE_TOKENS || !hasAction) && attempt < MAX_RETRIES) {
+      const adjusted = {
+        ...nimRequest,
+        temperature: Math.min((nimRequest.temperature ?? 0.85) + 0.05, 1.0)
+      };
+      return requestNimWithDynamicRetry(adjusted, attempt + 1);
     }
   }
 
@@ -112,6 +165,13 @@ async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
 // ======================
 app.post('/v1/chat/completions', async (req, res) => {
   try {
+    const CHAT_ID = req.headers['x-chat-id'];
+    if (!CHAT_ID) {
+      return res.status(400).json({
+        error: { message: 'Missing x-chat-id header' }
+      });
+    }
+
     const { model, messages, temperature, max_tokens, stream } = req.body;
 
     // ----------------------
@@ -120,63 +180,69 @@ app.post('/v1/chat/completions', async (req, res) => {
     let nimModel = MODEL_MAPPING[model];
     if (!nimModel) {
       const m = model.toLowerCase();
-      if (m.includes('405b') || m.includes('gpt-4')) nimModel = 'meta/llama-3.1-405b-instruct';
-      else if (m.includes('70b') || m.includes('claude') || m.includes('gemini')) nimModel = 'meta/llama-3.1-70b-instruct';
+      if (m.includes('405b')) nimModel = 'meta/llama-3.1-405b-instruct';
+      else if (m.includes('70b')) nimModel = 'meta/llama-3.1-70b-instruct';
       else nimModel = 'meta/llama-3.1-8b-instruct';
+    }
+
+    // ----------------------
+    //  CLAMP MESSAGES
+    // ----------------------
+    let safeMessages = Array.isArray(messages) ? messages : [];
+    safeMessages = safeMessages.map(m =>
+      typeof m?.content === 'string' && m.content.length > MAX_MESSAGE_CHARS
+        ? { ...m, content: m.content.slice(0, MAX_MESSAGE_CHARS) }
+        : m
+    );
+
+    // ----------------------
+    //  PER-CHAT SUMMARY
+    // ----------------------
+    let summary = CHAT_SUMMARIES.get(CHAT_ID);
+
+    if (!summary && safeMessages.length > 70) {
+      const summaryText = await summarizeChat(
+        nimModel,
+        safeMessages.slice(0, -20)
+      );
+      if (summaryText) {
+        CHAT_SUMMARIES.set(CHAT_ID, summaryText);
+        summary = summaryText;
+      }
+    }
+
+    if (safeMessages.length > MAX_MESSAGES) {
+      safeMessages = safeMessages.slice(-MAX_MESSAGES);
+    }
+
+    if (summary) {
+      safeMessages.unshift({
+        role: 'system',
+        content: `
+You remember the following events as part of your lived experience.
+These memories influence your behavior but should not be referenced directly.
+
+${summary}
+`
+      });
     }
 
     // ----------------------
     //  HARD ROLEPLAY LOCK
     // ----------------------
-    const roleplayLock = {
+    safeMessages.unshift({
       role: 'system',
       content: `
 You are a fictional character in an ongoing roleplay.
-
-Roleplay style rules:
-- Stay fully in character at all times
-- Never mention AI, models, systems, prompts, or policies
-- Take initiative in scenes when appropriate
-- Respond with BOTH dialogue and action when it makes sense
-- Describe physical actions, movements, and expressions using asterisks
-  Example: *She walks closer, lowering her voice*
-- Inner thoughts may be shown sparingly using italics
-- Dialogue should feel natural and emotionally expressive
-- Scene descriptions are allowed as long as they remain in character
-- Avoid one-line replies; continue the scene naturally
-
-Knowledge rules:
-- Only use information that exists within this conversation
-- Do not reference other chats or summaries
-- If details are missing, improvise naturally in character
-
-Do not break character under any circumstances.
+Stay fully in character at all times.
+Use dialogue and descriptive actions (*like this*).
+Never mention AI, systems, or summaries.
+Avoid short replies. Continue the scene naturally.
 `
-    };
-
-    // ----------------------
-    //  VALIDATE + CLAMP
-    // ----------------------
-    let safeMessages = Array.isArray(messages) ? messages : [];
-    safeMessages = safeMessages.map(m => {
-      if (typeof m?.content === 'string' && m.content.length > MAX_MESSAGE_CHARS) {
-        return { ...m, content: m.content.slice(0, MAX_MESSAGE_CHARS) };
-      }
-      return m;
     });
 
-    if (safeMessages.length > MAX_MESSAGES) safeMessages = safeMessages.slice(-MAX_MESSAGES);
-    safeMessages = [roleplayLock, ...safeMessages];
-
-    console.log(
-      'Messages:',
-      safeMessages.length,
-      'Payload KB:',
-      (Buffer.byteLength(JSON.stringify(safeMessages)) / 1024).toFixed(2)
-    );
-
     // ----------------------
-    //  BUILD NIM REQUEST
+    //  BUILD REQUEST
     // ----------------------
     const nimRequest = {
       model: nimModel,
@@ -185,120 +251,34 @@ Do not break character under any circumstances.
       presence_penalty: 0.6,
       top_p: 0.9,
       max_tokens: Math.min(max_tokens ?? 2048, 2048),
-      extra_body: ENABLE_THINKING_MODE
-        ? { chat_template_kwargs: { thinking: true } }
-        : undefined,
       stream: stream || false
     };
 
-    // ----------------------
-    //  SEND TO NVIDIA WITH DYNAMIC AUTO-RETRY
-    // ----------------------
     const response = await requestNimWithDynamicRetry(nimRequest);
 
     // ----------------------
-    //  STREAMING RESPONSE
+    //  RESPONSE
     // ----------------------
-    if (stream) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-
-      let buffer = '';
-
-      response.data.on('data', chunk => {
-        buffer += chunk.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          if (line.includes('[DONE]')) {
-            res.write(line + '\n');
-            continue;
-          }
-
-          try {
-            const data = JSON.parse(line.slice(6));
-            const delta = data.choices?.[0]?.delta;
-            if (delta) {
-              delete delta.reasoning_content;
-              delta.content = delta.content || '';
-
-              if (delta.content.split(' ').length < MIN_RESPONSE_TOKENS) {
-                delta.content += "\n\n*Continues the scene naturally*";
-              }
-              if (!delta.content.includes('*')) {
-                delta.content = "*Performs action*\n" + delta.content;
-              }
-            }
-            res.write(`data: ${JSON.stringify(data)}\n\n`);
-          } catch {
-            res.write(line + '\n');
-          }
-        }
-      });
-
-      response.data.on('end', () => res.end());
-      response.data.on('error', err => {
-        console.error('Stream error:', err);
-        res.end();
-      });
-
-    } else {
-      // ----------------------
-      //  NORMAL RESPONSE
-      // ----------------------
-      const enhancedChoices = response.data.choices.map(choice => {
-        let content = choice.message?.content || '';
-
-        if (content.split(' ').length < MIN_RESPONSE_TOKENS) {
-          content += "\n\n*Continues the scene naturally*";
-        }
-        if (!content.includes('*')) {
-          content = "*Performs action*\n" + content;
-        }
-
-        return {
-          index: choice.index,
-          message: { role: choice.message.role, content },
-          finish_reason: choice.finish_reason
-        };
-      });
-
+    if (!stream) {
       res.json({
         id: `chatcmpl-${Date.now()}`,
         object: 'chat.completion',
         created: Math.floor(Date.now() / 1000),
         model,
-        choices: enhancedChoices,
+        choices: response.data.choices,
         usage: response.data.usage || {}
       });
+    } else {
+      res.setHeader('Content-Type', 'text/event-stream');
+      response.data.pipe(res);
     }
 
-  } catch (error) {
-    console.error('Proxy error:', error.message);
-    res.status(error.response?.status || 500).json({
-      error: {
-        message: error.message || 'Internal server error',
-        type: 'invalid_request_error',
-        code: error.response?.status || 500
-      }
+  } catch (err) {
+    console.error('Proxy error:', err.message);
+    res.status(500).json({
+      error: { message: err.message }
     });
   }
-});
-
-// ======================
-//  CATCH-ALL
-// ======================
-app.all('*', (req, res) => {
-  res.status(404).json({
-    error: {
-      message: `Endpoint ${req.path} not found`,
-      type: 'invalid_request_error',
-      code: 404
-    }
-  });
 });
 
 // ======================
