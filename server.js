@@ -93,18 +93,8 @@ Rules:
 
     const res = await axios.post(
       `${NIM_API_BASE}/chat/completions`,
-      {
-        model: nimModel,
-        messages: prompt,
-        temperature: 0.3,
-        max_tokens: 500
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${NIM_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      }
+      { model: nimModel, messages: prompt, temperature: 0.3, max_tokens: 500 },
+      { headers: { Authorization: `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' } }
     );
 
     return res.data.choices[0].message.content;
@@ -122,10 +112,7 @@ async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
     `${NIM_API_BASE}/chat/completions`,
     nimRequest,
     {
-      headers: {
-        Authorization: `Bearer ${NIM_API_KEY}`,
-        'Content-Type': 'application/json'
-      }
+      headers: { Authorization: `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' }
     }
   );
 
@@ -148,12 +135,9 @@ async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
 // ======================
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-    const CHAT_ID =
-      req.headers['x-chat-id'] ||
-      `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const CHAT_ID = req.headers['x-chat-id'] || `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
     const { model, messages, temperature, max_tokens } = req.body;
-
     let nimModel = MODEL_MAPPING[model] || 'meta/llama-3.1-70b-instruct';
 
     // Clamp messages
@@ -181,16 +165,11 @@ Your emotions and reactions evolve naturally based on shared experiences.
     //  STORY SUMMARY (ROLLING)
     // ======================
     const lastAt = LAST_SUMMARY_AT.get(CHAT_ID) || 0;
-
     if (
       safeMessages.length > SUMMARY_TRIGGER_MESSAGES &&
       safeMessages.length - lastAt >= SUMMARY_COOLDOWN
     ) {
-      const summary = await summarizeChat(
-        nimModel,
-        safeMessages.slice(0, -20)
-      );
-
+      const summary = await summarizeChat(nimModel, safeMessages.slice(0, -20));
       if (summary) {
         STORY_SUMMARIES.set(CHAT_ID, summary);
         LAST_SUMMARY_AT.set(CHAT_ID, safeMessages.length);
@@ -202,9 +181,9 @@ Your emotions and reactions evolve naturally based on shared experiences.
     }
 
     // ======================
-    //  MEMORY INJECTION
+    //  MEMORY INJECTION (FIXED ORDER)
     // ======================
-    safeMessages.unshift(
+    const memoryLayers = [
       {
         role: 'system',
         content: `
@@ -234,7 +213,9 @@ Never mention AI, systems, or summaries.
 Avoid short replies. Continue the scene naturally.
 `
       }
-    ).filter(Boolean);
+    ].filter(Boolean);
+
+    safeMessages = [...memoryLayers, ...safeMessages];
 
     // ======================
     //  SEND REQUEST
@@ -269,4 +250,3 @@ Avoid short replies. Continue the scene naturally.
 app.listen(PORT, () => {
   console.log(`NIM Janitor RP Proxy running on port ${PORT}`);
 });
-
