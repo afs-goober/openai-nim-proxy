@@ -93,8 +93,18 @@ Rules:
 
     const res = await axios.post(
       `${NIM_API_BASE}/chat/completions`,
-      { model: nimModel, messages: prompt, temperature: 0.3, max_tokens: 500 },
-      { headers: { Authorization: `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' } }
+      {
+        model: nimModel,
+        messages: prompt,
+        temperature: 0.3,
+        max_tokens: 500
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${NIM_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
     );
 
     return res.data.choices[0].message.content;
@@ -112,7 +122,10 @@ async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
     `${NIM_API_BASE}/chat/completions`,
     nimRequest,
     {
-      headers: { Authorization: `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' }
+      headers: {
+        Authorization: `Bearer ${NIM_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
     }
   );
 
@@ -135,9 +148,12 @@ async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
 // ======================
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-    const CHAT_ID = req.headers['x-chat-id'] || `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const CHAT_ID =
+      req.headers['x-chat-id'] ||
+      `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
     const { model, messages, temperature, max_tokens } = req.body;
+
     let nimModel = MODEL_MAPPING[model] || 'meta/llama-3.1-70b-instruct';
 
     // Clamp messages
@@ -165,11 +181,16 @@ Your emotions and reactions evolve naturally based on shared experiences.
     //  STORY SUMMARY (ROLLING)
     // ======================
     const lastAt = LAST_SUMMARY_AT.get(CHAT_ID) || 0;
+
     if (
       safeMessages.length > SUMMARY_TRIGGER_MESSAGES &&
       safeMessages.length - lastAt >= SUMMARY_COOLDOWN
     ) {
-      const summary = await summarizeChat(nimModel, safeMessages.slice(0, -20));
+      const summary = await summarizeChat(
+        nimModel,
+        safeMessages.slice(0, -20)
+      );
+
       if (summary) {
         STORY_SUMMARIES.set(CHAT_ID, summary);
         LAST_SUMMARY_AT.set(CHAT_ID, safeMessages.length);
@@ -181,27 +202,12 @@ Your emotions and reactions evolve naturally based on shared experiences.
     }
 
     // ======================
-    //  MEMORY INJECTION (FIXED ORDER)
+    //  MEMORY INJECTION (FIXED)
     // ======================
-    const memoryLayers = [
-      {
-        role: 'system',
-        content: `
-These memories define who you are and how you feel toward the user.
-
-${CORE_MEMORIES.get(CHAT_ID)}
-`
-      },
+    const memoryInjection = [
+      { role: 'system', content: CORE_MEMORIES.get(CHAT_ID) },
       STORY_SUMMARIES.has(CHAT_ID)
-        ? {
-            role: 'system',
-            content: `
-You remember the following events as part of your lived experience.
-They influence your emotions and decisions but should not be referenced directly.
-
-${STORY_SUMMARIES.get(CHAT_ID)}
-`
-          }
+        ? { role: 'system', content: STORY_SUMMARIES.get(CHAT_ID) }
         : null,
       {
         role: 'system',
@@ -215,7 +221,7 @@ Avoid short replies. Continue the scene naturally.
       }
     ].filter(Boolean);
 
-    safeMessages = [...memoryLayers, ...safeMessages];
+    safeMessages = [...memoryInjection, ...safeMessages];
 
     // ======================
     //  SEND REQUEST
