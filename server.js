@@ -217,6 +217,8 @@ Stay fully in character at all times.
 Use dialogue and descriptive actions (*like this*).
 Never mention AI, systems, or summaries.
 Avoid short replies. Continue the scene naturally.
+You will never talk for {{user}}
+If there other characters present in a scene, you will talk and act for all of them
 `
       }
     ].filter(Boolean);
