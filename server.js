@@ -1,6 +1,6 @@
 // server.js - OpenAI to NVIDIA NIM API Proxy
 // Janitor RP Safe + 413 Protected + OpenRouter-like Layer
-// + Dynamic Auto-Regeneration + Multi-Layer Per-Chat Memory
+// + Dynamic Auto-Regeneration + Hybrid Multi-Layer Memory
 
 const express = require('express');
 const cors = require('cors');
@@ -34,26 +34,30 @@ const MAX_RETRIES = 5;
 // ======================
 const SUMMARY_TRIGGER_MESSAGES = 60;
 const SUMMARY_COOLDOWN = 40;
+const ANCHOR_EVERY_N_SUMMARIES = 3;
 
 // ======================
 //  MEMORY STORAGE (PER CHAT)
 // ======================
-const CORE_MEMORIES = new Map();        // Stable identity memory
-const STORY_SUMMARIES = new Map();      // Rolling plot summary
-const LAST_SUMMARY_AT = new Map();      // Cooldown tracker
+const CORE_MEMORIES = new Map();
+const STORY_SUMMARIES = new Map();
+const ANCHOR_SUMMARIES = new Map();
+const LAST_SUMMARY_AT = new Map();
+const SUMMARY_COUNT = new Map();
 
 // ======================
-//  MODEL MAPPING
+//  MODEL MAPPING (CHAT)
 // ======================
 const MODEL_MAPPING = {
-  'gpt-3.5-turbo': 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
-  'gpt-4': 'meta/llama-3.1-70b-instruct',
-  'gpt-4-turbo': 'moonshotai/kimi-k2-instruct-0905',
   'gpt-4o': 'deepseek-ai/deepseek-v3.1',
-  'claude-3-opus': 'openai/gpt-oss-120b',
-  'claude-3-sonnet': 'openai/gpt-oss-20b',
-  'gemini-pro': 'qwen/qwen3-next-80b-a3b-thinking'
+  'gpt-4': 'meta/llama-3.1-70b-instruct'
 };
+
+// ======================
+//  SUMMARY MODELS
+// ======================
+const FAST_SUMMARY_MODEL = 'deepseek-ai/deepseek-v3.1';
+const ANCHOR_SUMMARY_MODEL = 'meta/llama-3.1-70b-instruct';
 
 // ======================
 //  HEALTH CHECK
@@ -61,40 +65,38 @@ const MODEL_MAPPING = {
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
-    service: 'NIM Janitor RP Proxy',
-    max_messages: MAX_MESSAGES,
-    memory_layers: ['core', 'story_summary', 'recent_context']
+    memory_layers: ['core', 'story', 'anchor', 'recent']
   });
 });
 
 // ======================
 //  HELPER: RP-SAFE SUMMARY
 // ======================
-async function summarizeChat(nimModel, messages) {
-  try {
-    const prompt = [
-      {
-        role: 'system',
-        content: `
+async function summarizeChat(model, messages) {
+  const prompt = [
+    {
+      role: 'system',
+      content: `
 Summarize the following roleplay strictly in-universe.
 
 Rules:
-- Write as memories the character would personally remember
-- Preserve relationships, emotions, promises, conflicts, and goals
+- Write as lived memories
+- Preserve emotions, relationships, promises, conflicts
 - Do NOT mention AI, systems, summaries, or chats
 - Be concise but complete
 `
-      },
-      {
-        role: 'user',
-        content: messages.map(m => `${m.role}: ${m.content}`).join('\n')
-      }
-    ];
+    },
+    {
+      role: 'user',
+      content: messages.map(m => `${m.role}: ${m.content}`).join('\n')
+    }
+  ];
 
+  try {
     const res = await axios.post(
       `${NIM_API_BASE}/chat/completions`,
       {
-        model: nimModel,
+        model,
         messages: prompt,
         temperature: 0.3,
         max_tokens: 500
@@ -117,10 +119,10 @@ Rules:
 // ======================
 //  HELPER: AUTO-RETRY
 // ======================
-async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
-  const response = await axios.post(
+async function requestNimWithDynamicRetry(reqBody, attempt = 0) {
+  const res = await axios.post(
     `${NIM_API_BASE}/chat/completions`,
-    nimRequest,
+    reqBody,
     {
       headers: {
         Authorization: `Bearer ${NIM_API_KEY}`,
@@ -129,18 +131,17 @@ async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
     }
   );
 
-  const content = response.data.choices[0].message?.content || '';
-  const wc = content.split(/\s+/).length;
-  const hasAction = content.includes('*');
+  const text = res.data.choices[0].message?.content || '';
+  const wc = text.split(/\s+/).length;
 
-  if ((wc < MIN_RESPONSE_TOKENS || !hasAction) && attempt < MAX_RETRIES) {
+  if ((wc < MIN_RESPONSE_TOKENS || !text.includes('*')) && attempt < MAX_RETRIES) {
     return requestNimWithDynamicRetry(
-      { ...nimRequest, temperature: Math.min((nimRequest.temperature ?? 0.85) + 0.05, 1) },
+      { ...reqBody, temperature: Math.min((reqBody.temperature ?? 0.85) + 0.05, 1) },
       attempt + 1
     );
   }
 
-  return response;
+  return res;
 }
 
 // ======================
@@ -154,9 +155,11 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     const { model, messages, temperature, max_tokens } = req.body;
 
-    let nimModel = MODEL_MAPPING[model] || 'meta/llama-3.1-70b-instruct';
+    const nimModel = MODEL_MAPPING[model] || FAST_SUMMARY_MODEL;
 
+    // ----------------------
     // Clamp messages
+    // ----------------------
     let safeMessages = Array.isArray(messages) ? messages : [];
     safeMessages = safeMessages.map(m =>
       typeof m?.content === 'string' && m.content.length > MAX_MESSAGE_CHARS
@@ -164,35 +167,45 @@ app.post('/v1/chat/completions', async (req, res) => {
         : m
     );
 
-    // ======================
-    //  CORE MEMORY (SEED ONCE)
-    // ======================
+    // ----------------------
+    // Core memory (once)
+    // ----------------------
     if (!CORE_MEMORIES.has(CHAT_ID)) {
       CORE_MEMORIES.set(
         CHAT_ID,
-        `
-You have an ongoing personal connection with the user.
-Your emotions and reactions evolve naturally based on shared experiences.
-`
+        `You have a continuous personal relationship with the user. Your emotions and behavior evolve naturally over time.`
       );
+      SUMMARY_COUNT.set(CHAT_ID, 0);
     }
 
-    // ======================
-    //  STORY SUMMARY (ROLLING)
-    // ======================
+    // ----------------------
+    // Rolling summaries
+    // ----------------------
     const lastAt = LAST_SUMMARY_AT.get(CHAT_ID) || 0;
 
     if (
       safeMessages.length > SUMMARY_TRIGGER_MESSAGES &&
       safeMessages.length - lastAt >= SUMMARY_COOLDOWN
     ) {
+      const count = (SUMMARY_COUNT.get(CHAT_ID) || 0) + 1;
+      SUMMARY_COUNT.set(CHAT_ID, count);
+
+      const modelToUse =
+        count % ANCHOR_EVERY_N_SUMMARIES === 0
+          ? ANCHOR_SUMMARY_MODEL
+          : FAST_SUMMARY_MODEL;
+
       const summary = await summarizeChat(
-        nimModel,
+        modelToUse,
         safeMessages.slice(0, -20)
       );
 
       if (summary) {
-        STORY_SUMMARIES.set(CHAT_ID, summary);
+        if (modelToUse === ANCHOR_SUMMARY_MODEL) {
+          ANCHOR_SUMMARIES.set(CHAT_ID, summary);
+        } else {
+          STORY_SUMMARIES.set(CHAT_ID, summary);
+        }
         LAST_SUMMARY_AT.set(CHAT_ID, safeMessages.length);
       }
     }
@@ -201,33 +214,43 @@ Your emotions and reactions evolve naturally based on shared experiences.
       safeMessages = safeMessages.slice(-MAX_MESSAGES);
     }
 
-    // ======================
-    //  MEMORY INJECTION (FIXED)
-    // ======================
-    const memoryInjection = [
-      { role: 'system', content: CORE_MEMORIES.get(CHAT_ID) },
-      STORY_SUMMARIES.has(CHAT_ID)
-        ? { role: 'system', content: STORY_SUMMARIES.get(CHAT_ID) }
-        : null,
-      {
+    // ----------------------
+    // Memory injection (SAFE)
+    // ----------------------
+    const systemMessages = [];
+
+    systemMessages.push({ role: 'system', content: CORE_MEMORIES.get(CHAT_ID) });
+
+    if (ANCHOR_SUMMARIES.has(CHAT_ID)) {
+      systemMessages.push({
         role: 'system',
-        content: `
+        content: ANCHOR_SUMMARIES.get(CHAT_ID)
+      });
+    }
+
+    if (STORY_SUMMARIES.has(CHAT_ID)) {
+      systemMessages.push({
+        role: 'system',
+        content: STORY_SUMMARIES.get(CHAT_ID)
+      });
+    }
+
+    systemMessages.push({
+      role: 'system',
+      content: `
 You are a fictional character in an ongoing roleplay.
-Stay fully in character at all times.
+Stay fully in character.
 Use dialogue and descriptive actions (*like this*).
 Never mention AI, systems, or summaries.
-Avoid short replies. Continue the scene naturally.
-You will never talk for {{user}}
-If there other characters present in a scene, you will talk and act for all of them
+You never speak for {{user}}.
 `
-      }
-    ].filter(Boolean);
+    });
 
-    safeMessages = [...memoryInjection, ...safeMessages];
+    safeMessages = [...systemMessages, ...safeMessages];
 
-    // ======================
-    //  SEND REQUEST
-    // ======================
+    // ----------------------
+    // Send request
+    // ----------------------
     const response = await requestNimWithDynamicRetry({
       model: nimModel,
       messages: safeMessages,
