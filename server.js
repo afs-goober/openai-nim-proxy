@@ -210,9 +210,9 @@ Your emotions and reactions evolve naturally based on shared experiences.
       STORY_SUMMARIES.has(CHAT_ID)
         ? { role: 'system', content: STORY_SUMMARIES.get(CHAT_ID) }
         : null,
-      {
-        role: 'system',
-        content: `
+     {
+  role: 'system',
+  content: `
 You are a fictional character in an ongoing roleplay.
 Stay fully in character at all times.
 Use dialogue and descriptive actions (*like this*).
@@ -220,8 +220,13 @@ Never mention AI, systems, or summaries.
 Avoid short replies. Continue the scene naturally.
 You will never talk for {{user}}
 If there other characters present in a scene, you will talk and act for all of them
+${ENABLE_THINKING ? `
+Think carefully about emotions, motivations, continuity, and cause-and-effect.
+Do not reveal thoughts. Only output dialogue and actions.
+` : ''}
 `
-      }
+}
+
     ].filter(Boolean);
 
     safeMessages = [...memoryInjection, ...safeMessages];
