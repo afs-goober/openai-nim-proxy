@@ -1,6 +1,6 @@
 // server.js - OpenAI to NVIDIA NIM API Proxy
 // Janitor RP Safe + 413 Protected + OpenRouter-like Layer
-// + Dynamic Auto-Regeneration + Multi-Layer Per-Chat Memory + Wipe Commands
+// + Multi-Layer Per-Chat Memory + Wipe Commands
 
 const express = require('express');
 const cors = require('cors');
@@ -26,7 +26,7 @@ const NIM_API_KEY = process.env.NIM_API_KEY;
 // ======================
 // SAFE LIMITS
 // ======================
-const MAX_MESSAGES = 35;
+const MAX_MESSAGES = 30;          // <<< recent context size
 const MAX_MESSAGE_CHARS = 8000;
 const MIN_RESPONSE_TOKENS = 50;
 const MAX_RETRIES = 5;
@@ -50,7 +50,6 @@ const LAST_SUMMARY_AT = new Map();
 const MODEL_MAPPING = {
   'gpt-3.5-turbo': 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
   'gpt-4': 'meta/llama-3.1-70b-instruct',
-  'gpt-4-turbo': 'moonshotai/kimi-k2-instruct-0905',
   'gpt-4o': 'deepseek-ai/deepseek-v3.1'
 };
 
@@ -61,7 +60,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     service: 'NIM Janitor RP Proxy',
-    memory_layers: ['core', 'story_summary', 'recent_context']
+    memory_layers: ['core', 'story_summary', 'recent_context_30']
   });
 });
 
@@ -78,8 +77,8 @@ async function summarizeChat(model, messages) {
           {
             role: 'system',
             content: `
-Summarize the following roleplay strictly in-universe.
-Preserve emotions, relationships, promises, conflicts, and goals.
+Summarize the roleplay strictly in-universe.
+Preserve relationships, emotions, promises, conflicts, and goals.
 Never mention AI, systems, summaries, or chats.
 `
           },
@@ -108,20 +107,24 @@ Never mention AI, systems, summaries, or chats.
 // ======================
 // HELPER: AUTO-RETRY
 // ======================
-async function requestWithRetry(req, attempt = 0) {
-  const res = await axios.post(`${NIM_API_BASE}/chat/completions`, req, {
-    headers: {
-      Authorization: `Bearer ${NIM_API_KEY}`,
-      'Content-Type': 'application/json'
+async function requestWithRetry(payload, attempt = 0) {
+  const res = await axios.post(
+    `${NIM_API_BASE}/chat/completions`,
+    payload,
+    {
+      headers: {
+        Authorization: `Bearer ${NIM_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
     }
-  });
+  );
 
   const text = res.data.choices[0].message?.content || '';
   const wc = text.split(/\s+/).length;
 
   if (wc < MIN_RESPONSE_TOKENS && attempt < MAX_RETRIES) {
     return requestWithRetry(
-      { ...req, temperature: Math.min((req.temperature ?? 0.85) + 0.05, 1) },
+      { ...payload, temperature: Math.min((payload.temperature ?? 0.85) + 0.05, 1) },
       attempt + 1
     );
   }
@@ -139,7 +142,6 @@ app.post('/v1/chat/completions', async (req, res) => {
       `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
     const { model, messages, temperature, max_tokens } = req.body;
-
     const lastMessage = messages?.[messages.length - 1]?.content?.trim();
 
     // ======================
@@ -151,7 +153,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       LAST_SUMMARY_AT.delete(CHAT_ID);
 
       return res.json({
-        choices: [{ message: { role: 'assistant', content: '*Memories cleared for this chat.*' } }]
+        choices: [{ message: { role: 'assistant', content: '*This chat’s memories have been cleared.*' } }]
       });
     }
 
@@ -161,7 +163,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       LAST_SUMMARY_AT.clear();
 
       return res.json({
-        choices: [{ message: { role: 'assistant', content: '*All memories have been erased.*' } }]
+        choices: [{ message: { role: 'assistant', content: '*All stored memories have been erased.*' } }]
       });
     }
 
@@ -199,13 +201,16 @@ app.post('/v1/chat/completions', async (req, res) => {
       safeMessages.length > SUMMARY_TRIGGER_MESSAGES &&
       safeMessages.length - lastAt >= SUMMARY_COOLDOWN
     ) {
-      const summary = await summarizeChat(nimModel, safeMessages.slice(0, -20));
+      const summary = await summarizeChat(nimModel, safeMessages.slice(0, -15));
       if (summary) {
         STORY_SUMMARIES.set(CHAT_ID, summary);
         LAST_SUMMARY_AT.set(CHAT_ID, safeMessages.length);
       }
     }
 
+    // ======================
+    // RECENT CONTEXT (30)
+    // ======================
     if (safeMessages.length > MAX_MESSAGES) {
       safeMessages = safeMessages.slice(-MAX_MESSAGES);
     }
@@ -226,7 +231,7 @@ Stay fully in character.
 Use dialogue and descriptive actions (*like this*).
 Never mention AI or systems.
 Avoid short replies.
-${ENABLE_THINKING ? 'Think carefully but never reveal thoughts.' : ''}
+${ENABLE_THINKING ? 'Think carefully about continuity and emotions, but never reveal thoughts.' : ''}
 `
       }
     ].filter(Boolean);
