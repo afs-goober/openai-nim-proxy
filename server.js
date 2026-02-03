@@ -142,12 +142,15 @@ app.post('/v1/chat/completions', async (req, res) => {
       `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
     const { model, messages, temperature, max_tokens } = req.body;
-    const lastMessage = messages?.[messages.length - 1]?.content?.trim();
+    const lastMessage = messages?.[messages.length - 1]?.content
+  ?.toLowerCase()
+  ?.trim();
+
 
     // ======================
     // WIPE COMMANDS
     // ======================
-    if (lastMessage === '/wipe') {
+   if (lastMessage === '/wipe') {
       CORE_MEMORIES.delete(CHAT_ID);
       STORY_SUMMARIES.delete(CHAT_ID);
       LAST_SUMMARY_AT.delete(CHAT_ID);
