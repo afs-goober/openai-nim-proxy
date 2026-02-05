@@ -1,6 +1,6 @@
 // server.js - OpenAI to NVIDIA NIM API Proxy
 // Janitor RP Safe + 413 Protected + OpenRouter-like Layer
-// + Multi-Layer Per-Chat Memory + Wipe Commands
+// + Core Memory Only (NO SUMMARIES) + Wipe Commands
 
 const express = require('express');
 const cors = require('cors');
@@ -20,29 +20,22 @@ app.use(express.json({ limit: '1mb' }));
 // ======================
 // NVIDIA NIM CONFIG
 // ======================
-const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
+const NIM_API_BASE =
+  process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
 // ======================
 // SAFE LIMITS
 // ======================
-const MAX_MESSAGES = 30;          // <<< recent context size
+const MAX_MESSAGES = 30; // recent context only
 const MAX_MESSAGE_CHARS = 8000;
 const MIN_RESPONSE_TOKENS = 50;
 const MAX_RETRIES = 5;
 
 // ======================
-// MEMORY CONFIG
-// ======================
-const SUMMARY_TRIGGER_MESSAGES = 60;
-const SUMMARY_COOLDOWN = 40;
-
-// ======================
 // MEMORY STORAGE (PER CHAT)
 // ======================
 const CORE_MEMORIES = new Map();
-const STORY_SUMMARIES = new Map();
-const LAST_SUMMARY_AT = new Map();
 
 // ======================
 // MODEL MAPPING
@@ -60,49 +53,10 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     service: 'NIM Janitor RP Proxy',
-    memory_layers: ['core', 'story_summary', 'recent_context_30']
+    memory_layers: ['core', 'recent_context_30'],
+    summaries: 'disabled'
   });
 });
-
-// ======================
-// HELPER: RP-SAFE SUMMARY
-// ======================
-async function summarizeChat(model, messages) {
-  try {
-    const res = await axios.post(
-      `${NIM_API_BASE}/chat/completions`,
-      {
-        model,
-        messages: [
-          {
-            role: 'system',
-            content: `
-Summarize the roleplay strictly in-universe.
-Preserve relationships, emotions, promises, conflicts, and goals.
-Never mention AI, systems, summaries, or chats.
-`
-          },
-          {
-            role: 'user',
-            content: messages.map(m => `${m.role}: ${m.content}`).join('\n')
-          }
-        ],
-        temperature: 0.3,
-        max_tokens: 500
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${NIM_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    return res.data.choices[0].message.content;
-  } catch {
-    return null;
-  }
-}
 
 // ======================
 // HELPER: AUTO-RETRY
@@ -124,7 +78,10 @@ async function requestWithRetry(payload, attempt = 0) {
 
   if (wc < MIN_RESPONSE_TOKENS && attempt < MAX_RETRIES) {
     return requestWithRetry(
-      { ...payload, temperature: Math.min((payload.temperature ?? 0.85) + 0.05, 1) },
+      {
+        ...payload,
+        temperature: Math.min((payload.temperature ?? 0.85) + 0.05, 1)
+      },
       attempt + 1
     );
   }
@@ -142,31 +99,39 @@ app.post('/v1/chat/completions', async (req, res) => {
       `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
     const { model, messages, temperature, max_tokens } = req.body;
-    const lastMessage = messages?.[messages.length - 1]?.content
-  ?.toLowerCase()
-  ?.trim();
 
+    const lastMessage = messages?.[messages.length - 1]?.content
+      ?.toLowerCase()
+      ?.trim();
 
     // ======================
     // WIPE COMMANDS
     // ======================
-   if (lastMessage === '/wipe') {
+    if (lastMessage === '/wipe') {
       CORE_MEMORIES.delete(CHAT_ID);
-      STORY_SUMMARIES.delete(CHAT_ID);
-      LAST_SUMMARY_AT.delete(CHAT_ID);
-
       return res.json({
-        choices: [{ message: { role: 'assistant', content: '*This chat’s memories have been cleared.*' } }]
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: '*This chat’s memories have been cleared.*'
+            }
+          }
+        ]
       });
     }
 
     if (lastMessage === '/wipe_all') {
       CORE_MEMORIES.clear();
-      STORY_SUMMARIES.clear();
-      LAST_SUMMARY_AT.clear();
-
       return res.json({
-        choices: [{ message: { role: 'assistant', content: '*All stored memories have been erased.*' } }]
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: '*All stored memories have been erased.*'
+            }
+          }
+        ]
       });
     }
 
@@ -186,7 +151,7 @@ app.post('/v1/chat/completions', async (req, res) => {
     );
 
     // ======================
-    // CORE MEMORY
+    // CORE MEMORY (LIGHT)
     // ======================
     if (!CORE_MEMORIES.has(CHAT_ID)) {
       CORE_MEMORIES.set(
@@ -196,23 +161,7 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
 
     // ======================
-    // STORY SUMMARY
-    // ======================
-    const lastAt = LAST_SUMMARY_AT.get(CHAT_ID) || 0;
-
-    if (
-      safeMessages.length > SUMMARY_TRIGGER_MESSAGES &&
-      safeMessages.length - lastAt >= SUMMARY_COOLDOWN
-    ) {
-      const summary = await summarizeChat(nimModel, safeMessages.slice(0, -15));
-      if (summary) {
-        STORY_SUMMARIES.set(CHAT_ID, summary);
-        LAST_SUMMARY_AT.set(CHAT_ID, safeMessages.length);
-      }
-    }
-
-    // ======================
-    // RECENT CONTEXT (30)
+    // RECENT CONTEXT ONLY
     // ======================
     if (safeMessages.length > MAX_MESSAGES) {
       safeMessages = safeMessages.slice(-MAX_MESSAGES);
@@ -223,9 +172,6 @@ app.post('/v1/chat/completions', async (req, res) => {
     // ======================
     const systemMessages = [
       { role: 'system', content: CORE_MEMORIES.get(CHAT_ID) },
-      STORY_SUMMARIES.has(CHAT_ID)
-        ? { role: 'system', content: STORY_SUMMARIES.get(CHAT_ID) }
-        : null,
       {
         role: 'system',
         content: `
@@ -234,10 +180,12 @@ Stay fully in character.
 Use dialogue and descriptive actions (*like this*).
 Never mention AI or systems.
 Avoid short replies.
-${ENABLE_THINKING ? 'Think carefully about continuity and emotions, but never reveal thoughts.' : ''}
+${ENABLE_THINKING
+  ? 'Think carefully about continuity and emotions, but never reveal thoughts.'
+  : ''}
 `
       }
-    ].filter(Boolean);
+    ];
 
     safeMessages = [...systemMessages, ...safeMessages];
 
