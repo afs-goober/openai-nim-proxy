@@ -49,7 +49,7 @@ const LAST_SUMMARY_AT = new Map();
 // ======================
 const MODEL_MAPPING = {
   'gpt-3.5-turbo': 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
-  'gpt-4': 'meta/llama-3.1-70b-instruct',
+  'gpt-4': 'deepseek-ai/deepseek-v3.2',
   'gpt-4o': 'deepseek-ai/deepseek-v3.1'
 };
 
@@ -173,7 +173,7 @@ app.post('/v1/chat/completions', async (req, res) => {
     // ======================
     // MODEL
     // ======================
-    const nimModel = MODEL_MAPPING[model] || 'meta/llama-3.1-70b-instruct';
+    const nimModel = MODEL_MAPPING[model] || 'deepseek-ai/deepseek-v3.1';
 
     // ======================
     // CLAMP MESSAGES
