@@ -138,7 +138,7 @@ app.post('/v1/chat/completions', async (req, res) => {
     // ======================
     // MODEL
     // ======================
-    const nimModel = MODEL_MAPPING[model] || 'deepseek-ai/deepseek-v3.1';
+    const nimModel = MODEL_MAPPING[model] || 'deepseek-ai/deepseek-v3.1-terminus';
 
     // ======================
     // CLAMP MESSAGES
