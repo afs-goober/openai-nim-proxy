@@ -220,7 +220,6 @@ Never mention AI, systems, or summaries.
 Avoid short replies. Continue the scene naturally.
 You will never talk for {{user}}
 If there other characters present in a scene, you will talk and act for all of them
-${ENABLE_THINKING ? `
 Think carefully about emotions, motivations, continuity, and cause-and-effect.
 Do not reveal thoughts. Only output dialogue and actions.
 ` : ''}
