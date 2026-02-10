@@ -1,50 +1,58 @@
-// server.js - OpenAI to NVIDIA NIM API Proxy
-// Janitor RP Safe + 413 Protected + OpenRouter-like Layer
-// + Dynamic Auto-Regeneration + Multi-Layer Per-Chat Memory
+// server.js - JanitorAI → NVIDIA NIM RP Proxy
+// Persistent Multi-Layer Memory + Resumable Chats
 
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const ENABLE_THINKING = true;
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ======================
-//  Middleware (413 SAFE)
+// Middleware
 // ======================
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
 // ======================
-//  NVIDIA NIM CONFIG
+// NVIDIA NIM CONFIG
 // ======================
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
 // ======================
-//  SAFE LIMITS
+// Limits & Memory Config
 // ======================
 const MAX_MESSAGES = 35;
 const MAX_MESSAGE_CHARS = 8000;
 const MIN_RESPONSE_TOKENS = 50;
 const MAX_RETRIES = 5;
-
-// ======================
-//  MEMORY CONFIG
-// ======================
 const SUMMARY_TRIGGER_MESSAGES = 60;
 const SUMMARY_COOLDOWN = 40;
 
 // ======================
-//  MEMORY STORAGE (PER CHAT)
+// Persistent Memory Dir
 // ======================
-const CORE_MEMORIES = new Map();        // Stable identity memory
-const STORY_SUMMARIES = new Map();      // Rolling plot summary
-const LAST_SUMMARY_AT = new Map();      // Cooldown tracker
+const MEMORY_DIR = path.join(__dirname, 'chat_memory');
+if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR);
+
+function memoryPath(chatId) {
+  return path.join(MEMORY_DIR, `${chatId}.json`);
+}
+
+function loadMemory(chatId) {
+  if (!fs.existsSync(memoryPath(chatId))) return null;
+  return JSON.parse(fs.readFileSync(memoryPath(chatId), 'utf8'));
+}
+
+function saveMemory(chatId, memory) {
+  fs.writeFileSync(memoryPath(chatId), JSON.stringify(memory, null, 2));
+}
 
 // ======================
-//  MODEL MAPPING
+// Model Mapping
 // ======================
 const MODEL_MAPPING = {
   'gpt-3.5-turbo': 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
@@ -57,78 +65,53 @@ const MODEL_MAPPING = {
 };
 
 // ======================
-//  HEALTH CHECK
+// Helper: Resolve Chat ID
 // ======================
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'NIM Janitor RP Proxy',
-    max_messages: MAX_MESSAGES,
-    memory_layers: ['core', 'story_summary', 'recent_context']
-  });
-});
+function resolveChatId(req) {
+  // 1️⃣ Header first
+  if (req.headers['x-chat-id']) return String(req.headers['x-chat-id']);
+  // 2️⃣ Try JanitorAI referer URL
+  const ref = req.headers['referer'] || req.headers['referrer'];
+  if (ref) {
+    const match = ref.match(/\/chats\/(\d+)/);
+    if (match) return match[1];
+  }
+  // 3️⃣ Fallback
+  return `anon-${req.ip}`;
+}
 
 // ======================
-//  HELPER: RP-SAFE SUMMARY
+// Helper: Summarize Chat
 // ======================
-async function summarizeChat(nimModel, messages) {
+async function summarizeChat(nimModel, messages, maxTokens, systemPrompt) {
   try {
-    const prompt = [
-      {
-        role: 'system',
-        content: `
-Summarize the following roleplay strictly in-universe.
-
-Rules:
-- Write as memories the character would personally remember
-- Preserve relationships, emotions, promises, conflicts, and goals
-- Do NOT mention AI, systems, summaries, or chats
-- Be concise but complete
-`
-      },
-      {
-        role: 'user',
-        content: messages.map(m => `${m.role}: ${m.content}`).join('\n')
-      }
-    ];
-
     const res = await axios.post(
       `${NIM_API_BASE}/chat/completions`,
       {
         model: nimModel,
-        messages: prompt,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: messages.map(m => `${m.role}: ${m.content}`).join('\n') }
+        ],
         temperature: 0.3,
-        max_tokens: 500
+        max_tokens: maxTokens
       },
-      {
-        headers: {
-          Authorization: `Bearer ${NIM_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      }
+      { headers: { Authorization: `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' } }
     );
-
     return res.data.choices[0].message.content;
   } catch (err) {
-    console.error('Summary failed:', err.message);
+    console.error('Summarization error:', err.message);
     return null;
   }
 }
 
 // ======================
-//  HELPER: AUTO-RETRY
+// Helper: Auto-Retry
 // ======================
 async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
-  const response = await axios.post(
-    `${NIM_API_BASE}/chat/completions`,
-    nimRequest,
-    {
-      headers: {
-        Authorization: `Bearer ${NIM_API_KEY}`,
-        'Content-Type': 'application/json'
-      }
-    }
-  );
+  const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
+    headers: { Authorization: `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' }
+  });
 
   const content = response.data.choices[0].message?.content || '';
   const wc = content.split(/\s+/).length;
@@ -140,102 +123,90 @@ async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
       attempt + 1
     );
   }
-
   return response;
 }
 
 // ======================
-//  CHAT COMPLETIONS
+// Chat Completion Endpoint
 // ======================
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-    const CHAT_ID =
-      req.headers['x-chat-id'] ||
-      `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
+    const CHAT_ID = resolveChatId(req);
     const { model, messages, temperature, max_tokens } = req.body;
+    const nimModel = MODEL_MAPPING[model] || 'deepseek-ai/deepseek-v3.1-terminus';
 
-    let nimModel = MODEL_MAPPING[model] || 'deepseek-ai/deepseek-v3.1-terminus';
-
-    // Clamp messages
-    let safeMessages = Array.isArray(messages) ? messages : [];
+    let safeMessages = Array.isArray(messages) ? messages.slice(-MAX_MESSAGES) : [];
     safeMessages = safeMessages.map(m =>
-      typeof m?.content === 'string' && m.content.length > MAX_MESSAGE_CHARS
+      m?.content?.length > MAX_MESSAGE_CHARS
         ? { ...m, content: m.content.slice(0, MAX_MESSAGE_CHARS) }
         : m
     );
 
     // ======================
-    //  CORE MEMORY (SEED ONCE)
+    // Load or init memory
     // ======================
-    if (!CORE_MEMORIES.has(CHAT_ID)) {
-      CORE_MEMORIES.set(
-        CHAT_ID,
-        `
-You have an ongoing personal connection with the user.
-Your emotions and reactions evolve naturally based on shared experiences.
-`
-      );
+    let memory = loadMemory(CHAT_ID);
+    if (!memory) {
+      memory = {
+        core: `You have an ongoing personal connection with the user.\nYour emotions and reactions evolve naturally through shared experiences.`,
+        summary: '',
+        scene: '',
+        lastSummaryAt: 0,
+        updatedAt: Date.now()
+      };
     }
 
     // ======================
-    //  STORY SUMMARY (ROLLING)
+    // Update summaries if triggered
     // ======================
-    const lastAt = LAST_SUMMARY_AT.get(CHAT_ID) || 0;
-
     if (
       safeMessages.length > SUMMARY_TRIGGER_MESSAGES &&
-      safeMessages.length - lastAt >= SUMMARY_COOLDOWN
+      safeMessages.length - memory.lastSummaryAt >= SUMMARY_COOLDOWN
     ) {
-      const summary = await summarizeChat(
+      memory.summary = await summarizeChat(
         nimModel,
-        safeMessages.slice(0, -20)
+        safeMessages.slice(0, -20),
+        500,
+        `Summarize the roleplay as in-universe memories. Preserve emotions, goals, conflicts.`
       );
 
-      if (summary) {
-        STORY_SUMMARIES.set(CHAT_ID, summary);
-        LAST_SUMMARY_AT.set(CHAT_ID, safeMessages.length);
-      }
-    }
+      memory.scene = await summarizeChat(
+        nimModel,
+        safeMessages.slice(-25),
+        120,
+        `Write a short scene-resume snapshot describing where the interaction paused.`
+      );
 
-    if (safeMessages.length > MAX_MESSAGES) {
-      safeMessages = safeMessages.slice(-MAX_MESSAGES);
+      memory.lastSummaryAt = safeMessages.length;
+      memory.updatedAt = Date.now();
+      saveMemory(CHAT_ID, memory);
     }
 
     // ======================
-    //  MEMORY INJECTION (FIXED)
+    // Memory injection
     // ======================
     const memoryInjection = [
-      { role: 'system', content: CORE_MEMORIES.get(CHAT_ID) },
-      STORY_SUMMARIES.has(CHAT_ID)
-        ? { role: 'system', content: STORY_SUMMARIES.get(CHAT_ID) }
+      { role: 'system', content: memory.core },
+      memory.summary ? { role: 'system', content: memory.summary } : null,
+      memory.scene
+        ? { role: 'system', content: `Resume the roleplay from this point:\n${memory.scene}` }
         : null,
-     {
-  role: 'system',
-  content: `
+      {
+        role: 'system',
+        content: `
 You are a fictional character in an ongoing roleplay.
-Stay fully in character at all times.
+Stay fully in character.
 Use dialogue and descriptive actions (*like this*).
 Never mention AI, systems, or summaries.
-Avoid short replies. Continue the scene naturally.
-You will never talk for {{user}}
-If there other characters present in a scene, you will talk and act for all of them
-Think carefully about emotions, motivations, continuity, and cause-and-effect.
-Do not reveal thoughts. Only output dialogue and actions.
-` : ''}
+Do not speak for the user.
+Continue the scene naturally.
 `
-}
-
+      }
     ].filter(Boolean);
 
-    safeMessages = [...memoryInjection, ...safeMessages];
-
-    // ======================
-    //  SEND REQUEST
-    // ======================
     const response = await requestNimWithDynamicRetry({
       model: nimModel,
-      messages: safeMessages,
+      messages: [...memoryInjection, ...safeMessages],
       temperature: temperature ?? 0.85,
       presence_penalty: 0.6,
       top_p: 0.9,
@@ -250,7 +221,6 @@ Do not reveal thoughts. Only output dialogue and actions.
       choices: response.data.choices,
       usage: response.data.usage || {}
     });
-
   } catch (err) {
     console.error('Proxy error:', err.message);
     res.status(500).json({ error: { message: err.message } });
@@ -258,7 +228,7 @@ Do not reveal thoughts. Only output dialogue and actions.
 });
 
 // ======================
-//  START SERVER
+// Start server
 // ======================
 app.listen(PORT, () => {
   console.log(`NIM Janitor RP Proxy running on port ${PORT}`);
