@@ -5,7 +5,6 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const ENABLE_THINKING = true;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -25,7 +24,7 @@ const NIM_API_KEY = process.env.NIM_API_KEY;
 // ======================
 //  SAFE LIMITS
 // ======================
-const MAX_MESSAGES = 35;
+const MAX_MESSAGES = 80;
 const MAX_MESSAGE_CHARS = 8000;
 const MIN_RESPONSE_TOKENS = 50;
 const MAX_RETRIES = 5;
@@ -48,8 +47,8 @@ const LAST_SUMMARY_AT = new Map();      // Cooldown tracker
 // ======================
 const MODEL_MAPPING = {
   'gpt-3.5-turbo': 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
-  'gpt-4': 'deepseek-ai/deepseek-v3.1-terminus',
-  'gpt-4-turbo': 'deepseek-ai/deepseek-v3.2',
+  'gpt-4': 'meta/llama-3.1-70b-instruct',
+  'gpt-4-turbo': 'moonshotai/kimi-k2-instruct-0905',
   'gpt-4o': 'deepseek-ai/deepseek-v3.1',
   'claude-3-opus': 'openai/gpt-oss-120b',
   'claude-3-sonnet': 'openai/gpt-oss-20b',
@@ -155,7 +154,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     const { model, messages, temperature, max_tokens } = req.body;
 
-    let nimModel = MODEL_MAPPING[model] || 'deepseek-ai/deepseek-v3.2';
+    let nimModel = MODEL_MAPPING[model] || 'meta/llama-3.1-70b-instruct';
 
     // Clamp messages
     let safeMessages = Array.isArray(messages) ? messages : [];
@@ -210,9 +209,9 @@ Your emotions and reactions evolve naturally based on shared experiences.
       STORY_SUMMARIES.has(CHAT_ID)
         ? { role: 'system', content: STORY_SUMMARIES.get(CHAT_ID) }
         : null,
-     {
-  role: 'system',
-  content: `
+      {
+        role: 'system',
+        content: `
 You are a fictional character in an ongoing roleplay.
 Stay fully in character at all times.
 Use dialogue and descriptive actions (*like this*).
@@ -220,12 +219,8 @@ Never mention AI, systems, or summaries.
 Avoid short replies. Continue the scene naturally.
 You will never talk for {{user}}
 If there other characters present in a scene, you will talk and act for all of them
-Think carefully about emotions, motivations, continuity, and cause-and-effect.
-Do not reveal thoughts. Only output dialogue and actions.
-` : ''}
 `
-}
-
+      }
     ].filter(Boolean);
 
     safeMessages = [...memoryInjection, ...safeMessages];
