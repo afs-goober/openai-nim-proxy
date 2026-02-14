@@ -127,9 +127,18 @@ async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
 // ======================
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-   // --- START ROBUST CHAT ID LOGIC ---
+// --- BULLETPROOF ID LOGIC ---
     let CHAT_ID = 'default';
     const referer = req.headers.referer || '';
+
+    if (referer.includes('/chats/')) {
+        CHAT_ID = referer.split('/chats/')[1].split('/')[0].split('?')[0];
+    } 
+      
+    else if (req.body.character_id) {
+        // If the URL fails, use the Character ID from the request body
+        CHAT_ID = "char-" + req.body.character_id;
+    }
     
     // Log the incoming referer so you can see it in Render Logs
     console.log(`[DEBUG] Incoming Referer: ${referer}`);
