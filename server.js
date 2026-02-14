@@ -69,8 +69,7 @@ async function summarizeChat(nimModel, messages) {
     const prompt = [
       {
         role: 'system',
-        content: `Summarize the following roleplay strictly in-universe.
-content: Summarize the key plot points of the provided roleplay history. 
+        content: `Summarize the following roleplay strictly in-universe. 
 
 Rules:
 - Write as memories the character would personally remember.
@@ -90,7 +89,7 @@ Rules:
     const res = await axios.post(
       `${NIM_API_BASE}/chat/completions`,
       { model: nimModel, messages: prompt, temperature: 0.3, max_tokens: 500 },
-      { headers: { Authorization: `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' } }
+      { headers: { Authorization: `Bearer ${NVIDIA_API_KEY}`, 'Content-Type': 'application/json' } }
     );
 
     return res.data.choices[0].message.content;
