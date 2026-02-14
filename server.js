@@ -128,11 +128,10 @@ async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
 app.post('/v1/chat/completions', async (req, res) => {
   try {
 // --- SAFE CHAT ID LOGIC ---
-let CHAT_ID =
-  req.body.conversation_id ||
-  req.body.chat_id ||
-  (req.body.character_id ? `char-${req.body.character_id}` : null) ||
-  null;
+let CHAT_ID = req.body.conversation_id
+  ? `conv-${req.body.conversation_id}`
+  : `char-${req.body.character_id}`;
+
 
 if (!CHAT_ID) {
   // fallback hash from messages (guaranteed stable per chat)
