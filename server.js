@@ -89,7 +89,7 @@ Rules:
     const res = await axios.post(
       `${NIM_API_BASE}/chat/completions`,
       { model: nimModel, messages: prompt, temperature: 0.3, max_tokens: 500 },
-      { headers: { Authorization: `Bearer ${NVIDIA_API_KEY}`, 'Content-Type': 'application/json' } }
+      { headers: { Authorization: `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' } }
     );
 
     return res.data.choices[0].message.content;
