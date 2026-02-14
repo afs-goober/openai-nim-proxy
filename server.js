@@ -75,6 +75,10 @@ Rules:
 - Preserve relationships, emotions, promises, conflicts, and goals
 - Do NOT mention AI, systems, summaries, or chats
 - Be concise but complete`
+ `Summarize the key plot points of the provided roleplay history. 
+- Stick ONLY to facts provided in the text.
+- If there is not enough information yet, say "Initial meeting in progress."
+- Do NOT invent outside drama or items (like pocket watches).`
       },
       {
         role: 'user',
