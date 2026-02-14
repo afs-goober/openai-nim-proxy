@@ -127,27 +127,22 @@ async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
 // ======================
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-// --- START ROBUST CHAT ID LOGIC ---
-    let CHAT_ID = 'default';
-    const referer = req.headers.referer || '';
+// --- SAFE CHAT ID LOGIC ---
+let CHAT_ID =
+  req.body.conversation_id ||
+  req.body.chat_id ||
+  (req.body.character_id ? `char-${req.body.character_id}` : null) ||
+  null;
 
-    if (referer.includes('/chats/')) {
-        // Option 1: Extract ID from the URL
-        CHAT_ID = referer.split('/chats/')[1].split('/')[0].split('?')[0];
-    } 
-    else if (req.body.character_id) {
-        // Option 2: Fallback to Character ID from the message data
-        CHAT_ID = "char-" + req.body.character_id;
-    }
-    else if (referer.includes('/characters/')) {
-        // Option 3: New chat fallback
-        CHAT_ID = "new-" + referer.split('/characters/')[1].split('/')[0].split('?')[0];
-    }
+if (!CHAT_ID) {
+  // fallback hash from messages (guaranteed stable per chat)
+  const crypto = require('crypto');
+  const firstMsg = JSON.stringify(req.body.messages?.[0] || {});
+  CHAT_ID = crypto.createHash('md5').update(firstMsg).digest('hex');
+}
 
-    // This log must stay AFTER the final 'else if' block
-    console.log(`[DEBUG] Incoming Referer: ${referer}`);
-    console.log(`[DEBUG] Final CHAT_ID assigned: ${CHAT_ID}`);
-    // --- END ROBUST CHAT ID LOGIC ---
+console.log(`[DEBUG] Final CHAT_ID assigned: ${CHAT_ID}`);
+
 
     const { model, messages, temperature, max_tokens } = req.body;
     let nimModel = MODEL_MAPPING[model] || 'deepseek-ai/deepseek-v3.2';
