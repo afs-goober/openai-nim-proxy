@@ -70,13 +70,14 @@ async function summarizeChat(nimModel, messages) {
       {
         role: 'system',
         content: `Summarize the following roleplay strictly in-universe.
+content: Summarize the key plot points of the provided roleplay history. 
+
 Rules:
-- Write as memories the character would personally remember
-- Preserve relationships, emotions, promises, conflicts, and goals
-- Do NOT mention AI, systems, summaries, or chats
-- Be concise but complete`
- `Summarize the key plot points of the provided roleplay history. 
+- Write as memories the character would personally remember.
+- Preserve relationships, emotions, promises, conflicts, and goals.
+- Do NOT mention AI, systems, summaries, or chats.
 - Stick ONLY to facts provided in the text.
+- Be concise but complete.
 - If there is not enough information yet, say "Initial meeting in progress."
 - Do NOT invent outside drama or items (like pocket watches).`
       },
