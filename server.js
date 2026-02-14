@@ -127,40 +127,25 @@ async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
 // ======================
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-// --- FINAL BULLETPROOF ID LOGIC ---
+// --- START ROBUST CHAT ID LOGIC ---
     let CHAT_ID = 'default';
     const referer = req.headers.referer || '';
 
     if (referer.includes('/chats/')) {
+        // Option 1: Extract ID from the URL
         CHAT_ID = referer.split('/chats/')[1].split('/')[0].split('?')[0];
     } 
     else if (req.body.character_id) {
-        // This is our secret weapon for when the Referer is blank
+        // Option 2: Fallback to Character ID from the message data
         CHAT_ID = "char-" + req.body.character_id;
     }
-    console.log(`[DEBUG] Final CHAT_ID assigned: ${CHAT_ID}`);
-      
-    else if (req.body.character_id) {
-        // If the URL fails, use the Character ID from the request body
-        CHAT_ID = "char-" + req.body.character_id;
-    }
-    
-    // Log the incoming referer so you can see it in Render Logs
-    console.log(`[DEBUG] Incoming Referer: ${referer}`);
-
-    if (referer.includes('/chats/')) {
-        // Standard JanitorAI chat URL: extracts the ID after /chats/
-        CHAT_ID = referer.split('/chats/')[1].split('/')[0].split('?')[0];
-    } 
     else if (referer.includes('/characters/')) {
-        // If it's a brand new chat, it might show /characters/ instead
+        // Option 3: New chat fallback
         CHAT_ID = "new-" + referer.split('/characters/')[1].split('/')[0].split('?')[0];
     }
-    else if (req.headers['x-chat-id']) {
-        // Check for a custom header just in case
-        CHAT_ID = req.headers['x-chat-id'];
-    }
 
+    // This log must stay AFTER the final 'else if' block
+    console.log(`[DEBUG] Incoming Referer: ${referer}`);
     console.log(`[DEBUG] Final CHAT_ID assigned: ${CHAT_ID}`);
     // --- END ROBUST CHAT ID LOGIC ---
 
