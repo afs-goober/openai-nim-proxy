@@ -123,16 +123,28 @@ async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
 // ======================
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-    // 1. EXTRACT CHAT ID FROM JANITOR URL
+   // --- START ROBUST CHAT ID LOGIC ---
     let CHAT_ID = 'default';
     const referer = req.headers.referer || '';
     
-    // Look for "janitorai.com/chats/12345"
+    // Log the incoming referer so you can see it in Render Logs
+    console.log(`[DEBUG] Incoming Referer: ${referer}`);
+
     if (referer.includes('/chats/')) {
+        // Standard JanitorAI chat URL: extracts the ID after /chats/
         CHAT_ID = referer.split('/chats/')[1].split('/')[0].split('?')[0];
-    } else if (req.headers['x-chat-id']) {
+    } 
+    else if (referer.includes('/characters/')) {
+        // If it's a brand new chat, it might show /characters/ instead
+        CHAT_ID = "new-" + referer.split('/characters/')[1].split('/')[0].split('?')[0];
+    }
+    else if (req.headers['x-chat-id']) {
+        // Check for a custom header just in case
         CHAT_ID = req.headers['x-chat-id'];
     }
+
+    console.log(`[DEBUG] Final CHAT_ID assigned: ${CHAT_ID}`);
+    // --- END ROBUST CHAT ID LOGIC ---
 
     const { model, messages, temperature, max_tokens } = req.body;
     let nimModel = MODEL_MAPPING[model] || 'deepseek-ai/deepseek-v3.2';
