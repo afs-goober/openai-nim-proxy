@@ -127,13 +127,18 @@ async function requestNimWithDynamicRetry(nimRequest, attempt = 0) {
 // ======================
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-// --- BULLETPROOF ID LOGIC ---
+// --- FINAL BULLETPROOF ID LOGIC ---
     let CHAT_ID = 'default';
     const referer = req.headers.referer || '';
 
     if (referer.includes('/chats/')) {
         CHAT_ID = referer.split('/chats/')[1].split('/')[0].split('?')[0];
     } 
+    else if (req.body.character_id) {
+        // This is our secret weapon for when the Referer is blank
+        CHAT_ID = "char-" + req.body.character_id;
+    }
+    console.log(`[DEBUG] Final CHAT_ID assigned: ${CHAT_ID}`);
       
     else if (req.body.character_id) {
         // If the URL fails, use the Character ID from the request body
