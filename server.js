@@ -223,8 +223,6 @@ If there other characters present in a scene, you will talk and act for all of t
 Think carefully about emotions, motivations, continuity, and cause-and-effect.
 Do not reveal thoughts. Only output dialogue and actions.
 ` : ''}
-`
-}
 
     ].filter(Boolean);
 
