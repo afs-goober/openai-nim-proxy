@@ -36,11 +36,6 @@ const SUMMARY_TRIGGER_MESSAGES = 60;
 const SUMMARY_COOLDOWN = 40;
 
 // ======================
-//  MEMORY TOGGLE
-// ======================
-const MEMORY_ENABLED = false; // ← set to true to re-enable memory
-
-// ======================
 //  MEMORY STORAGE (PER CHAT)
 // ======================
 const CORE_MEMORIES = new Map();        // Stable identity memory
@@ -172,36 +167,35 @@ app.post('/v1/chat/completions', async (req, res) => {
     // ======================
     //  CORE MEMORY (SEED ONCE)
     // ======================
-   if (MEMORY_ENABLED && !CORE_MEMORIES.has(CHAT_ID)) {
-  CORE_MEMORIES.set(
-    CHAT_ID,
-    `
+    if (!CORE_MEMORIES.has(CHAT_ID)) {
+      CORE_MEMORIES.set(
+        CHAT_ID,
+        `
 You have an ongoing personal connection with the user.
 Your emotions and reactions evolve naturally based on shared experiences.
 `
-  );
-}
+      );
+    }
 
     // ======================
     //  STORY SUMMARY (ROLLING)
     // ======================
-if (MEMORY_ENABLED) {
-  const lastAt = LAST_SUMMARY_AT.get(CHAT_ID) || 0;
+    const lastAt = LAST_SUMMARY_AT.get(CHAT_ID) || 0;
 
-  if (
-    safeMessages.length > SUMMARY_TRIGGER_MESSAGES &&
-    safeMessages.length - lastAt >= SUMMARY_COOLDOWN
-  ) {
-    const summary = await summarizeChat(
-      nimModel,
-      safeMessages.slice(0, -20)
-    );
+    if (
+      safeMessages.length > SUMMARY_TRIGGER_MESSAGES &&
+      safeMessages.length - lastAt >= SUMMARY_COOLDOWN
+    ) {
+      const summary = await summarizeChat(
+        nimModel,
+        safeMessages.slice(0, -20)
+      );
 
-    if (summary) {
-      STORY_SUMMARIES.set(CHAT_ID, summary);
-      LAST_SUMMARY_AT.set(CHAT_ID, safeMessages.length);
+      if (summary) {
+        STORY_SUMMARIES.set(CHAT_ID, summary);
+        LAST_SUMMARY_AT.set(CHAT_ID, safeMessages.length);
+      }
     }
-
 
     if (safeMessages.length > MAX_MESSAGES) {
       safeMessages = safeMessages.slice(-MAX_MESSAGES);
@@ -210,10 +204,14 @@ if (MEMORY_ENABLED) {
     // ======================
     //  MEMORY INJECTION (FIXED)
     // ======================
-    let memoryInjection = [
-  {
-    role: 'system',
-    content: `
+    const memoryInjection = [
+      { role: 'system', content: CORE_MEMORIES.get(CHAT_ID) },
+      STORY_SUMMARIES.has(CHAT_ID)
+        ? { role: 'system', content: STORY_SUMMARIES.get(CHAT_ID) }
+        : null,
+      {
+        role: 'system',
+        content: `
 You are a fictional character in an ongoing roleplay.
 Stay fully in character at all times.
 Use dialogue and descriptive actions (*like this*).
@@ -222,20 +220,10 @@ Avoid short replies. Continue the scene naturally.
 You will never talk for {{user}}
 If there other characters present in a scene, you will talk and act for all of them
 `
-  }
-];
+      }
+    ].filter(Boolean);
 
-if (MEMORY_ENABLED) {
-  memoryInjection.unshift(
-    { role: 'system', content: CORE_MEMORIES.get(CHAT_ID) },
-    STORY_SUMMARIES.has(CHAT_ID)
-      ? { role: 'system', content: STORY_SUMMARIES.get(CHAT_ID) }
-      : null
-  );
-  memoryInjection = memoryInjection.filter(Boolean);
-}
-
-safeMessages = [...memoryInjection, ...safeMessages];
+    safeMessages = [...memoryInjection, ...safeMessages];
 
     // ======================
     //  SEND REQUEST
