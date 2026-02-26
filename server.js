@@ -24,7 +24,7 @@ const NIM_API_KEY = process.env.NIM_API_KEY;
 // ======================
 //  SAFE LIMITS
 // ======================
-const MAX_MESSAGES = 70;
+const MAX_MESSAGES = 80;
 const MAX_MESSAGE_CHARS = 8000;
 const MIN_RESPONSE_TOKENS = 50;
 const MAX_RETRIES = 2;
