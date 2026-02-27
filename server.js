@@ -154,7 +154,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     const { model, messages, temperature, max_tokens } = req.body;
 
-    let nimModel = MODEL_MAPPING[model] || 'deepseek-ai/deepseek-v3.1';
+    let nimModel = MODEL_MAPPING[model] || 'qwen/qwen3-next-80b-a3b-thinking';
 
     // Clamp messages
     let safeMessages = Array.isArray(messages) ? messages : [];
