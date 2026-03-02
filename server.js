@@ -33,7 +33,7 @@ const MAX_RETRIES = 2;
 //  MEMORY CONFIG
 // ======================
 const SUMMARY_TRIGGER_MESSAGES = 100;
-const SUMMARY_COOLDOWN = 50;
+const SUMMARY_COOLDOWN = 60;
 
 // ======================
 //  MEMORY STORAGE (PER CHAT)
