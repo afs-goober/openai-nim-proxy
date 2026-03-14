@@ -33,7 +33,7 @@ const MAX_RETRIES = 2;
 //  SMART MEMORY CONFIG
 // ======================
 const MAX_CONTEXT_MESSAGES = 40;     // Keeps request size light and fast
-const MEMORY_UPDATE_INTERVAL = 20;   // Triggers background summary every 20 messages
+const MEMORY_UPDATE_INTERVAL = 100;   // Triggers background summary every 20 messages
 
 // ======================
 //  MEMORIES STORAGE (PER CHAT)
