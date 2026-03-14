@@ -30,17 +30,9 @@ const MIN_RESPONSE_TOKENS = 50;
 const MAX_RETRIES = 2;
 
 // ======================
-//  MEMORY CONFIG
-// ======================
-const SUMMARY_TRIGGER_MESSAGES = 100;
-const SUMMARY_COOLDOWN = 60;
-
-// ======================
-//  MEMORY STORAGE (PER CHAT)
+//  MEMORIES STORAGE (PER CHAT)
 // ======================
 const CORE_MEMORIES = new Map();        // Stable identity memory
-const STORY_SUMMARIES = new Map();      // Rolling plot summary
-const LAST_SUMMARY_AT = new Map();      // Cooldown tracker
 
 // ======================
 //  MODEL MAPPING
@@ -63,56 +55,9 @@ app.get('/health', (req, res) => {
     status: 'ok',
     service: 'NIM Janitor RP Proxy',
     max_messages: MAX_MESSAGES,
-    memory_layers: ['core', 'story_summary', 'recent_context']
+    memory_layers: ['core', 'recent_context']
   });
 });
-
-// ======================
-//  HELPER: RP-SAFE SUMMARY
-// ======================
-async function summarizeChat(nimModel, messages) {
-  try {
-    const prompt = [
-      {
-        role: 'system',
-        content: `
-Summarize the following roleplay strictly in-universe.
-
-Rules:
-- Write as memories the character would personally remember
-- Preserve relationships, emotions, promises, conflicts, and goals
-- Do NOT mention AI, systems, summaries, or chats
-- Be concise but complete
-`
-      },
-      {
-        role: 'user',
-        content: messages.map(m => `${m.role}: ${m.content}`).join('\n')
-      }
-    ];
-
-    const res = await axios.post(
-      `${NIM_API_BASE}/chat/completions`,
-      {
-        model: nimModel,
-        messages: prompt,
-        temperature: 0.3,
-        max_tokens: 500
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${NIM_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    return res.data.choices[0].message.content;
-  } catch (err) {
-    console.error('Summary failed:', err.message);
-    return null;
-  }
-}
 
 // ======================
 //  HELPER: AUTO-RETRY
@@ -154,7 +99,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     const { model, messages, temperature, max_tokens } = req.body;
 
-    let nimModel = MODEL_MAPPING[model] || 'deepseek-ai/deepseek-v3.2';
+    let nimModel = MODEL_MAPPING[model] || 'deepseek-ai/deepseek-v3.1-terminus';
 
     // Clamp messages
     let safeMessages = Array.isArray(messages) ? messages : [];
@@ -177,26 +122,6 @@ Your emotions and reactions evolve naturally based on shared experiences.
       );
     }
 
-    // ======================
-    //  STORY SUMMARY (ROLLING)
-    // ======================
-    const lastAt = LAST_SUMMARY_AT.get(CHAT_ID) || 0;
-
-    if (
-      safeMessages.length > SUMMARY_TRIGGER_MESSAGES &&
-      safeMessages.length - lastAt >= SUMMARY_COOLDOWN
-    ) {
-      const summary = await summarizeChat(
-        nimModel,
-        safeMessages.slice(0, -20)
-      );
-
-      if (summary) {
-        STORY_SUMMARIES.set(CHAT_ID, summary);
-        LAST_SUMMARY_AT.set(CHAT_ID, safeMessages.length);
-      }
-    }
-
     if (safeMessages.length > MAX_MESSAGES) {
       safeMessages = safeMessages.slice(-MAX_MESSAGES);
     }
@@ -206,16 +131,13 @@ Your emotions and reactions evolve naturally based on shared experiences.
     // ======================
     const memoryInjection = [
       { role: 'system', content: CORE_MEMORIES.get(CHAT_ID) },
-      STORY_SUMMARIES.has(CHAT_ID)
-        ? { role: 'system', content: STORY_SUMMARIES.get(CHAT_ID) }
-        : null,
       {
         role: 'system',
         content: `
 You are a fictional character in an ongoing roleplay.
 Stay fully in character at all times.
 Use dialogue and descriptive actions (*like this*).
-Never mention AI, systems, or summaries.
+Never mention AI or systems.
 Avoid short replies. Continue the scene naturally.
 You will never talk for {{user}}
 If there other characters present in a scene, you will talk and act for all of them
