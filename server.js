@@ -22,17 +22,25 @@ const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.c
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
 // ======================
-//  SAFE LIMITS
+//  SAFE LIMITS & CONFIG
 // ======================
-const MAX_MESSAGES = 80;
 const MAX_MESSAGE_CHARS = 8000;
 const MIN_RESPONSE_TOKENS = 50;
 const MAX_RETRIES = 2;
 
 // ======================
+//  SMART MEMORY CONFIG
+// ======================
+const MAX_CONTEXT_MESSAGES = 40;     // Keeps request size light and fast
+const SUMMARY_TRIGGER_MESSAGES = 60; // Wait until we have 60 messages
+const SUMMARY_COOLDOWN = 40;         // Then wait 40 more before summarizing again
+
+// ======================
 //  MEMORIES STORAGE (PER CHAT)
 // ======================
 const CORE_MEMORIES = new Map();        // Stable identity memory
+const STORY_SUMMARIES = new Map();      // Rolling plot summary
+const LAST_SUMMARY_AT = new Map();      // Cooldown tracker
 
 // ======================
 //  MODEL MAPPING
@@ -54,10 +62,57 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     service: 'NIM Janitor RP Proxy',
-    max_messages: MAX_MESSAGES,
-    memory_layers: ['core', 'recent_context']
+    memory_layers: ['core', 'story_summary', 'recent_context']
   });
 });
+
+// ======================
+//  HELPER: RP-SAFE SUMMARY (From Script 1)
+// ======================
+async function summarizeChat(nimModel, messages) {
+  try {
+    const prompt = [
+      {
+        role: 'system',
+        content: `
+Summarize the following roleplay strictly in-universe.
+
+Rules:
+- Write as memories the character would personally remember
+- Preserve relationships, emotions, promises, conflicts, and goals
+- Do NOT mention AI, systems, summaries, or chats
+- Be concise but complete
+`
+      },
+      {
+        role: 'user',
+        content: messages.map(m => `${m.role}: ${m.content}`).join('\n')
+      }
+    ];
+
+    const res = await axios.post(
+      `${NIM_API_BASE}/chat/completions`,
+      {
+        model: nimModel,
+        messages: prompt,
+        temperature: 0.3,
+        max_tokens: 500
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${NIM_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    console.log(`[Memory] Successfully generated in-universe summary`);
+    return res.data.choices[0].message.content;
+  } catch (err) {
+    console.error('[Memory] Summary failed:', err.message);
+    return null;
+  }
+}
 
 // ======================
 //  HELPER: AUTO-RETRY
@@ -101,7 +156,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     let nimModel = MODEL_MAPPING[model] || 'deepseek-ai/deepseek-v3.2';
 
-    // Clamp messages
+    // Clamp message lengths
     let safeMessages = Array.isArray(messages) ? messages : [];
     safeMessages = safeMessages.map(m =>
       typeof m?.content === 'string' && m.content.length > MAX_MESSAGE_CHARS
@@ -122,15 +177,42 @@ Your emotions and reactions evolve naturally based on shared experiences.
       );
     }
 
-    if (safeMessages.length > MAX_MESSAGES) {
-      safeMessages = safeMessages.slice(-MAX_MESSAGES);
+    // ======================
+    //  STORY SUMMARY (ROLLING - From Script 1)
+    // ======================
+    const lastAt = LAST_SUMMARY_AT.get(CHAT_ID) || 0;
+
+    if (
+      safeMessages.length > SUMMARY_TRIGGER_MESSAGES &&
+      safeMessages.length - lastAt >= SUMMARY_COOLDOWN
+    ) {
+      const summary = await summarizeChat(
+        nimModel,
+        safeMessages.slice(0, -20) // Summarize everything up to the last 20 messages
+      );
+
+      if (summary) {
+        STORY_SUMMARIES.set(CHAT_ID, summary);
+        LAST_SUMMARY_AT.set(CHAT_ID, safeMessages.length);
+      }
     }
 
     // ======================
-    //  MEMORY INJECTION (FIXED)
+    //  CONTEXT TRIMMING (From Script 2)
+    // ======================
+    // Keep only the most recent messages to prevent the payload from getting too heavy
+    if (safeMessages.length > MAX_CONTEXT_MESSAGES) {
+      safeMessages = safeMessages.slice(-MAX_CONTEXT_MESSAGES);
+    }
+
+    // ======================
+    //  MEMORY INJECTION
     // ======================
     const memoryInjection = [
       { role: 'system', content: CORE_MEMORIES.get(CHAT_ID) },
+      STORY_SUMMARIES.has(CHAT_ID) 
+        ? { role: 'system', content: `LONG-TERM MEMORY: ${STORY_SUMMARIES.get(CHAT_ID)}` }
+        : null,
       {
         role: 'system',
         content: `
