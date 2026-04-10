@@ -26,7 +26,7 @@ const NIM_API_KEY = process.env.NIM_API_KEY;
 // ======================
 const MAX_MESSAGE_CHARS = 8000;
 const MIN_RESPONSE_TOKENS = 50;
-const MAX_RETRIES = 2;
+const MAX_RETRIES = 1;
 
 // ======================
 //  SMART MEMORY CONFIG
